@@ -1,22 +1,19 @@
-# Bake Groups Tool 私有更新仓库
+# Bake Groups Tool 私有源码仓库
 
-此仓库用于 Bake Groups Tool 的私有版本发布和自动更新。
+本仓库保存插件源码快照和内部发布资料，仓库权限保持 **Private**。
 
-## 当前通道
+## 公开分发仓库
 
-- 稳定清单：`updates/stable.json`
-- Release：`v1.3.8`
-- 更新包：`Bake_Groups_Private_Release.zip`
-- 仓库权限：Private
+用户端不再输入 GitHub Token。插件从公开发布仓库下载经过 SHA256 校验的安装包：
 
-## 发布新版本
+- 发布仓库：[Bake-Groups-License-Status](https://github.com/huang200201-dotcom/Bake-Groups-License-Status)
+- 更新清单：`updates/stable.json`
+- 当前版本：`v1.3.8-license-final`
 
-1. 从本地发布框架生成新的 ZIP。
-2. 在 Releases 新建版本标签并上传 ZIP。
-3. 计算 ZIP 的 SHA256 和文件大小。
-4. 更新 `updates/stable.json` 中的版本、标签、文件名、SHA256 与大小。
-5. 在 Maya 插件中执行“检查更新”验证。
+公开仓库不包含源码、许可证私钥或 GitHub Token。
 
-## Token 安全
+## 授权机制
 
-插件不包含明文 Token。用户首次使用更新功能时输入只读 fine-grained PAT，插件使用 Windows DPAPI 加密保存到当前 Windows 用户目录。PAT 仅授予本仓库 `Contents: Read-only` 权限。
+插件使用 Ed25519 签名许可证绑定机器指纹，并使用 Windows DPAPI 保存本地许可证。每次启动会检查签名授权状态；联网失败时最多允许 14 天离线使用。管理员可通过公开仓库中的签名 `status.json` 停用许可证。
+
+许可证私钥只保存在管理员电脑的 `D:\Bake_Groups_License_Keys\ed25519_private.pem`，禁止上传到任何仓库。
