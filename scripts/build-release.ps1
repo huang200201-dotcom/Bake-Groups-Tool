@@ -97,7 +97,6 @@ try {
         $_.Extension.ToLowerInvariant() -in @('.pyc', '.cpp', '.c', '.h', '.hpp', '.obj', '.lib', '.exp', '.pdb', '.ilk') -or
         $_.Name -eq 'desktop.ini'
     } | Remove-Item -Force
-
     $activeVersion = [ordered]@{
         active_version = $RuntimeVersion
         package_version = $Version
