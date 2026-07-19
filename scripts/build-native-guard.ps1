@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($RuntimeSource)) {
-    $RuntimeSource = Join-Path $repoRoot 'plugin\Bake_Groups\versions\1.3.12'
+    $RuntimeSource = Join-Path $repoRoot 'plugin\Bake_Groups\versions\1.3.13'
 }
 $vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat'
 if (!(Test-Path $vcvars)) { throw "Visual Studio Build Tools not found: $vcvars" }
@@ -39,7 +39,7 @@ if ([string]::IsNullOrWhiteSpace($PythonLib)) {
 if (!$pythonLibFile) { throw "Maya Python import library not found under $libDir" }
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $guardDefine = '/DBG_NATIVE_GUARD_KEY_HEX=\"{0}\"' -f $nativeGuardKey
-$cmd = "call `"$vcvars`" x64 && cl /nologo /LD /EHsc /std:c++17 $guardDefine /I`"$PybindInclude`" /I`"$include`" `"$source`" /link /LIBPATH:`"$libDir`" $($pythonLibFile.Name) /OUT:`"$(Join-Path $outDir 'bg_math_core.pyd')`""
+$cmd = "call `"$vcvars`" x64 && cl /nologo /LD /EHsc /std:c++17 /O2 /GL /Gy /DNDEBUG $guardDefine /I`"$PybindInclude`" /I`"$include`" `"$source`" /link /LTCG /OPT:REF /OPT:ICF /LIBPATH:`"$libDir`" $($pythonLibFile.Name) /OUT:`"$(Join-Path $outDir 'bg_math_core.pyd')`""
 cmd.exe /d /c $cmd
 if ($LASTEXITCODE -ne 0) { throw "Native build failed for Maya $MayaVersion" }
 Write-Output "Built native guard: $(Join-Path $outDir 'bg_math_core.pyd')"

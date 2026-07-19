@@ -17,7 +17,7 @@ SOURCE_DIR = os.path.join(PACKAGE_DIR, "Bake_Groups")
 TARGET_DIR = os.path.normpath(os.path.join(cmds.internalVar(userScriptDir=True), "Bake_Groups"))
 BUTTON_LABEL = "BAKE GROUPS"
 BUTTON_ANNOTATION = u"打开 Bake Master 高低模烘焙分组工具"
-RUNTIME_VERSION = "1.3.12"
+RUNTIME_VERSION = "1.3.13"
 SUPPORTED_MAYA = ("2022", "2023", "2024", "2025", "2026", "2027")
 
 

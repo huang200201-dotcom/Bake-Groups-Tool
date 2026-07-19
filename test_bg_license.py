@@ -6,7 +6,7 @@ import unittest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 RUNTIME = os.path.join(
-    os.path.dirname(__file__), "plugin", "Bake_Groups", "versions", "1.3.12"
+    os.path.dirname(__file__), "plugin", "Bake_Groups", "versions", "1.3.13"
 )
 import sys
 sys.path.insert(0, RUNTIME)
