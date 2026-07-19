@@ -1,0 +1,18 @@
+{
+    "schema_version": 1,
+    "channel": "stable",
+    "manifest_api_url": "https://raw.githubusercontent.com/huang200201-dotcom/Bake-Groups-License-Status/main/updates/stable.json",
+    "repository_url": "https://github.com/huang200201-dotcom/Bake-Groups-License-Status",
+    "repository": "huang200201-dotcom/Bake-Groups-License-Status",
+    "repository_api_url": "https://api.github.com/repos/huang200201-dotcom/Bake-Groups-License-Status",
+    "private_repository": false,
+    "token_storage": "none",
+    "auto_check": true,
+    "check_interval_hours": 24,
+    "request_timeout_seconds": 15,
+    "max_download_mb": 100,
+    "max_extract_mb": 500,
+    "manifest_path": "updates/stable.json",
+    "manifest_ref": "main",
+    "asset_size_required": true
+}

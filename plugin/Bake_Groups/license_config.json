@@ -1,0 +1,18 @@
+{
+    "schema_version": 1,
+    "product_id": "bake-master",
+    "product": "Bake Master",
+    "public_key_b64": "OGJmrHn2lTdC+7gFuZiaRz0nq406dBnT+s20gYMF6d0=",
+    "status_url": "https://raw.githubusercontent.com/huang200201-dotcom/Bake-Groups-License-Status/main/status.json",
+    "offline_days": 14,
+    "timeout_seconds": 5,
+    "native_guard_required": true,
+    "native_guard_builds": {
+        "2022": true,
+        "2023": true,
+        "2024": true,
+        "2025": true,
+        "2026": true,
+        "2027": true
+    }
+}

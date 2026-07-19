@@ -1,38 +1,24 @@
-# Bake Groups Tool 私有源码仓库
+# Bake Master
 
-本仓库保存插件源码快照和内部发布资料，仓库权限保持 **Private**。
+Bake Master 是 Autodesk Maya 的高低模烘焙分组插件。本仓库保存私有源码、构建脚本和内部发布资料。
 
-## 公开分发仓库
+## 当前版本
 
-用户端不再输入 GitHub Token。插件从公开发布仓库下载经过 SHA256 校验的安装包：
+- 插件版本：1.3.9
+- Maya：2022–2027（Windows x64）
+- 授权：Ed25519 签名许可证、机器绑定、Windows DPAPI、14 天离线宽限
+- 原生保护：六个 Maya 版本均包含 C++ 原生门禁和 Windows CNG SHA-256 会话验证
 
-- 发布仓库：[Bake-Groups-License-Status](https://github.com/huang200201-dotcom/Bake-Groups-License-Status)
+## 公开热更新
+
+用户端不需要 GitHub Token。插件从公开仓库获取签名状态和稳定更新清单：
+
+- 发布仓库：`huang200201-dotcom/Bake-Groups-License-Status`
 - 更新清单：`updates/stable.json`
-- 当前版本：`v1.3.9`
+- 当前发布标签：`v1.3.9`
 
-公开仓库不包含源码、许可证私钥或 GitHub Token。
+公开仓库只包含发布包、SHA256、更新清单和签名授权状态，不包含源码、许可证私钥或 GitHub Token。
 
-## 授权机制
+## 安全要求
 
-插件使用 Ed25519 签名许可证绑定机器指纹，并使用 Windows DPAPI 保存本地许可证。每次启动会检查签名授权状态；联网失败时最多允许 14 天离线使用。管理员可通过公开仓库中的签名 `status.json` 停用许可证。
-
-许可证私钥只保存在管理员电脑的 `D:\Bake_Groups_License_Keys\ed25519_private.pem`，禁止上传到任何仓库。
-# Bake Groups Tool 私有源码仓库
-
-本仓库保存插件源码快照和内部发布资料，仓库权限保持 **Private**。
-
-## 公开分发仓库
-
-用户端不再输入 GitHub Token。插件从公开发布仓库下载经过 SHA256 校验的安装包：
-
-- 发布仓库：[Bake-Groups-License-Status](https://github.com/huang200201-dotcom/Bake-Groups-License-Status)
-- 更新清单：`updates/stable.json`
-- 当前版本：`v1.3.8-license-final`
-
-公开仓库不包含源码、许可证私钥或 GitHub Token。
-
-## 授权机制
-
-插件使用 Ed25519 签名许可证绑定机器指纹，并使用 Windows DPAPI 保存本地许可证。每次启动会检查签名授权状态；联网失败时最多允许 14 天离线使用。管理员可通过公开仓库中的签名 `status.json` 停用许可证。
-
-许可证私钥只保存在管理员电脑的 `D:\Bake_Groups_License_Keys\ed25519_private.pem`，禁止上传到任何仓库。
+许可证私钥仅保存在管理员电脑中，禁止提交到任何 Git 仓库或打包进插件。发布包必须通过 SHA256、文件清单和原生门禁审计。
