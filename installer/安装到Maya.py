@@ -17,7 +17,7 @@ SOURCE_DIR = os.path.join(PACKAGE_DIR, "Bake_Groups")
 TARGET_DIR = os.path.normpath(os.path.join(cmds.internalVar(userScriptDir=True), "Bake_Groups"))
 BUTTON_LABEL = "BAKE GROUPS"
 BUTTON_ANNOTATION = u"打开 Bake Master 高低模烘焙分组工具"
-RUNTIME_VERSION = "1.3.9"
+RUNTIME_VERSION = "1.3.11"
 SUPPORTED_MAYA = ("2022", "2023", "2024", "2025", "2026", "2027")
 
 
@@ -103,24 +103,13 @@ def _path_is_inside(path, directory):
 
 
 def _validate_source():
-    runtime_version = RUNTIME_VERSION
-    active_path = os.path.join(SOURCE_DIR, "active_version.json")
-    try:
-        import json
-        with open(active_path, "rb") as handle:
-            active = json.loads(handle.read().decode("utf-8-sig"))
-        candidate = str(active.get("active_version", "")).strip()
-        if candidate and all(char.isalnum() or char in ".-_+" for char in candidate):
-            runtime_version = candidate
-    except Exception:
-        pass
     required = (
         os.path.join(SOURCE_DIR, "launcher.py"),
-        active_path,
-        os.path.join(SOURCE_DIR, "versions", runtime_version, "bg_main_window.py"),
+        os.path.join(SOURCE_DIR, "active_version.json"),
+        os.path.join(SOURCE_DIR, "versions", RUNTIME_VERSION, "bg_main_window.py"),
     )
     required += tuple(
-        os.path.join(SOURCE_DIR, "versions", runtime_version, "bin", version, "bg_math_core.pyd")
+        os.path.join(SOURCE_DIR, "versions", RUNTIME_VERSION, "bin", version, "bg_math_core.pyd")
         for version in SUPPORTED_MAYA
     )
     missing = [path for path in required if not os.path.isfile(path)]
