@@ -1,4 +1,4 @@
-Bake Master 1.3.11
+Bake Master 1.3.12
 完整便携安装包
 
 支持：Maya 2022、2023、2024、2025、2026、2027（Windows 64 位）

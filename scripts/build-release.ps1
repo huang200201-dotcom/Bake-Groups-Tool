@@ -94,7 +94,8 @@ try {
         $_.Name -eq '__pycache__'
     } | Remove-Item -Recurse -Force
     Get-ChildItem -LiteralPath $packageRoot -File -Recurse -Force | Where-Object {
-        $_.Extension -eq '.pyc' -or $_.Name -eq 'desktop.ini'
+        $_.Extension.ToLowerInvariant() -in @('.pyc', '.cpp', '.c', '.h', '.hpp', '.obj', '.lib', '.exp', '.pdb', '.ilk') -or
+        $_.Name -eq 'desktop.ini'
     } | Remove-Item -Force
 
     $activeVersion = [ordered]@{
