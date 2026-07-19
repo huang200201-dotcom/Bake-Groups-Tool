@@ -9,7 +9,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($RuntimeSource)) {
-    $RuntimeSource = Join-Path $repoRoot 'plugin\Bake_Groups\versions\1.3.13'
+    $activeConfigPath = Join-Path $repoRoot 'plugin\Bake_Groups\active_version.json'
+    if (-not (Test-Path -LiteralPath $activeConfigPath -PathType Leaf)) {
+        throw "Active-version configuration is missing: $activeConfigPath"
+    }
+    $activeConfig = Get-Content -LiteralPath $activeConfigPath -Raw | ConvertFrom-Json
+    $activeVersion = [string]$activeConfig.active_version
+    if ([string]::IsNullOrWhiteSpace($activeVersion) -or $activeVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+        throw "Invalid active runtime version: '$activeVersion'"
+    }
+    $RuntimeSource = Join-Path $repoRoot ("plugin\Bake_Groups\versions\{0}" -f $activeVersion)
 }
 $vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat'
 if (!(Test-Path $vcvars)) { throw "Visual Studio Build Tools not found: $vcvars" }

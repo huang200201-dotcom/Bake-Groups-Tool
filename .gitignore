@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+dist/
+*.tmp
+*.bak
+.bg_update.lock
+.bg_update.lock.guard
