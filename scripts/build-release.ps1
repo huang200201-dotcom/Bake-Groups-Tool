@@ -77,6 +77,13 @@ try {
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     Copy-Item -LiteralPath $pluginSource -Destination (Join-Path $packageRoot 'Bake_Groups') -Recurse -Force
 
+    # An update archive must expose exactly one runtime payload. Keep older
+    # versions in source control for rollback, but never ship them together.
+    $packagedVersions = Join-Path $packageRoot 'Bake_Groups\versions'
+    Get-ChildItem -LiteralPath $packagedVersions -Directory -Force | Where-Object {
+        $_.Name -ne $RuntimeVersion
+    } | Remove-Item -Recurse -Force
+
     Get-ChildItem -LiteralPath $installerSource -File -Force | Where-Object {
         $_.Name -ne 'SHA256.txt'
     } | ForEach-Object {
