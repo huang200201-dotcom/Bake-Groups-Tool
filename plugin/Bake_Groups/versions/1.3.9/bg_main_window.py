@@ -392,25 +392,33 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
         self.cb_keep_hp_structure.toggled.connect(self.on_keep_hp_structure_toggled)
 
         self.btn_combine_mesh = QtWidgets.QPushButton("Combine")
-        configure_square_icon_button(self.btn_combine_mesh, "Combine.png", "Combine", size=38, icon_size=26)
         self.btn_combine_mesh.clicked.connect(lambda checked=False: self.run_undoable_bg_action("Combine", self.tool_combine))
         self.btn_separate_mesh = QtWidgets.QPushButton("Separate")
-        configure_square_icon_button(self.btn_separate_mesh, "Separate.png", "Separate", size=38, icon_size=26)
         self.btn_separate_mesh.clicked.connect(lambda checked=False: self.run_undoable_bg_action("Separate", self.tool_separate))
         self.btn_find_zbrush = QtWidgets.QPushButton("Find ZBrush")
-        configure_square_icon_button(self.btn_find_zbrush, "Find_ZBRUSH.png", "Find ZBrush", size=38, icon_size=26)
         self.btn_find_zbrush.clicked.connect(self.find_zbrush_meshes)
         self.btn_find_zbrush.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.btn_find_zbrush.customContextMenuRequested.connect(self.show_find_zbrush_context_menu)
 
         self.btn_check_before_analyze = QtWidgets.QPushButton("Check Before Analyze")
-        configure_square_icon_button(self.btn_check_before_analyze, "Cheking_Icon.png", "Check Before Analyze", size=38, icon_size=26)
         self.btn_check_before_analyze.clicked.connect(lambda checked=False: self.run_undoable_bg_action("Check", self.run_pre_analysis_checks))
 
-        tool_layout.addWidget(self.btn_combine_mesh)
-        tool_layout.addWidget(self.btn_separate_mesh)
-        tool_layout.addWidget(self.btn_find_zbrush)
-        tool_layout.addWidget(self.btn_check_before_analyze)
+        prep_buttons = (
+            self.btn_combine_mesh,
+            self.btn_separate_mesh,
+            self.btn_find_zbrush,
+            self.btn_check_before_analyze,
+        )
+        for button in prep_buttons:
+            button.setProperty("role", "secondary")
+            button.setMinimumHeight(34)
+            button.setMinimumWidth(104)
+            button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+
+        tool_layout.addWidget(self.btn_combine_mesh, 1)
+        tool_layout.addWidget(self.btn_separate_mesh, 1)
+        tool_layout.addWidget(self.btn_find_zbrush, 1)
+        tool_layout.addWidget(self.btn_check_before_analyze, 1)
 
         tool_checks = QtWidgets.QVBoxLayout()
         tool_checks.setSpacing(0)
