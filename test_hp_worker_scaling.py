@@ -37,7 +37,10 @@ def load_scaling_helpers():
         if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in wanted
     ]
     namespace = {"math": math, "heapq": heapq}
-    module = ast.Module(body=selected)
+    try:
+        module = ast.Module(body=selected, type_ignores=[])
+    except TypeError:  # Python 3.7
+        module = ast.Module(body=selected)
     ast.fix_missing_locations(module)
     exec(compile(module, WORKER_PATH, "exec"), namespace)
     return namespace

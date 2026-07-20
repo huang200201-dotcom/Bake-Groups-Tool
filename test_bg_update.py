@@ -29,7 +29,7 @@ def runtime_under_test():
         active_version = str(json.load(stream).get("active_version") or "")
     # An unreleased development runtime intentionally takes precedence so the
     # tests cannot silently keep exercising the currently published version.
-    candidates = ("1.3.14", active_version)
+    candidates = ("1.3.15", active_version)
     for version in candidates:
         candidate = os.path.join(PLUGIN_ROOT, "versions", version)
         if version and os.path.isfile(os.path.join(candidate, "bg_update.py")):
@@ -149,6 +149,13 @@ class UpdateCoreTests(unittest.TestCase):
         with open(self.active_path, "rb") as stream:
             return json.loads(stream.read().decode("utf-8-sig"))
 
+    def test_required_runtime_covers_every_declared_localization(self):
+        with open(os.path.join(HERE, "localization", "languages.json"), "rb") as stream:
+            languages = json.loads(stream.read().decode("utf-8-sig"))
+        required = set(bg_update.REQUIRED_RUNTIME_FILES)
+        for language in languages.get("languages", []):
+            self.assertIn("localization/" + language["file"], required)
+
     def test_success_keeps_old_version_and_atomically_activates_new(self):
         archive_path, spec = self._create_archive()
         result = bg_update.install_archive(self.plugin_root, archive_path, spec)
@@ -164,6 +171,37 @@ class UpdateCoreTests(unittest.TestCase):
         self.assertEqual("1.3.8", active["package_version"])
         self.assertNotIn("path", active)
         self.assertEqual(b"payload:launcher.py", read_bytes(self.launcher_path))
+
+    def test_staging_cleanup_failure_does_not_overwrite_success(self):
+        archive_path, spec = self._create_archive()
+        original_remove_tree = bg_update._safe_remove_tree
+
+        def fail_only_for_staging(path, expected_parent):
+            if os.path.basename(path).startswith(".bg-update-"):
+                raise OSError("temporarily locked")
+            return original_remove_tree(path, expected_parent)
+
+        with mock.patch.object(bg_update, "_safe_remove_tree", side_effect=fail_only_for_staging):
+            result = bg_update.install_archive(self.plugin_root, archive_path, spec)
+
+        self.assertTrue(result.installed_new)
+        self.assertEqual("1.3.8", self._read_active()["active_version"])
+
+    def test_lock_cleanup_failure_does_not_overwrite_success(self):
+        archive_path, spec = self._create_archive()
+        lock_path = os.path.join(self.plugin_root, ".bg_update.lock")
+        original_remove = bg_update.os.remove
+
+        def fail_only_for_lock(path):
+            if os.path.normcase(path) == os.path.normcase(lock_path):
+                raise OSError("temporarily locked")
+            return original_remove(path)
+
+        with mock.patch.object(bg_update.os, "remove", side_effect=fail_only_for_lock):
+            result = bg_update.install_archive(self.plugin_root, archive_path, spec)
+
+        self.assertTrue(result.installed_new)
+        self.assertEqual("1.3.8", self._read_active()["active_version"])
 
     def test_same_verified_version_is_idempotent(self):
         archive_path, spec = self._create_archive()
@@ -183,6 +221,17 @@ class UpdateCoreTests(unittest.TestCase):
         self.assertEqual(self.original_active, read_bytes(self.active_path))
         self.assertEqual(self.original_launcher, read_bytes(self.launcher_path))
         self.assertFalse(os.path.exists(os.path.join(self.versions_root, "1.3.8")))
+
+    def test_configured_archive_limit_is_enforced_by_installer(self):
+        archive_path, spec = self._create_archive()
+        with self.assertRaises(bg_update.IntegrityError):
+            bg_update.install_archive(
+                self.plugin_root,
+                archive_path,
+                spec,
+                max_archive_bytes=1,
+            )
+        self.assertEqual(self.original_active, read_bytes(self.active_path))
 
     def test_zip_traversal_is_rejected_before_install(self):
         archive_path, spec = self._create_archive(
@@ -456,6 +505,163 @@ class GithubApiTests(unittest.TestCase):
         self.assertEqual("Bearer secret-token", opener.requests[0].get_header("Authorization"))
         self.assertEqual("Bearer secret-token", opener.requests[1].get_header("Authorization"))
         self.assertEqual("application/octet-stream", opener.requests[1].get_header("Accept"))
+
+    def test_required_release_asset_size_cannot_be_omitted(self):
+        release = {
+            "assets": [
+                {
+                    "name": "update.zip",
+                    "url": "https://api.github.com/repos/acme/private/releases/assets/123",
+                }
+            ]
+        }
+        opener = FakeOpener(
+            [
+                FakeResponse(
+                    json.dumps(release).encode("utf-8"),
+                    "https://api.github.com/repos/acme/private/releases/tags/v1.3.8",
+                )
+            ]
+        )
+        with self.assertRaises(bg_update.GithubApiError):
+            bg_update.download_github_release_asset(
+                "acme",
+                "private",
+                "v1.3.8",
+                "update.zip",
+                os.path.join(self.temp, "update.zip"),
+                "0" * 64,
+                opener=opener,
+                require_declared_size=True,
+            )
+
+    def test_checked_in_stable_manifest_has_valid_independent_signature(self):
+        with open(os.path.join(PLUGIN_ROOT, "update_config.json"), "rb") as stream:
+            config = json.loads(stream.read().decode("utf-8-sig"))
+        with open(
+            os.path.join(os.path.dirname(PLUGIN_ROOT), os.pardir, "updates", "stable.json"),
+            "rb",
+        ) as stream:
+            manifest = json.loads(stream.read().decode("utf-8-sig"))
+        public_key = config.get("manifest_public_key_b64")
+        self.assertTrue(bg_update.verify_update_manifest_signature(manifest, public_key))
+        tampered = dict(manifest)
+        tampered["version"] = "99.0.0"
+        with self.assertRaises(bg_update.IntegrityError):
+            bg_update.verify_update_manifest_signature(tampered, public_key)
+
+    def test_manifest_signature_rejects_field_signature_and_metadata_tampering(self):
+        with open(
+            os.path.join(os.path.dirname(PLUGIN_ROOT), os.pardir, "updates", "stable.json"),
+            "rb",
+        ) as stream:
+            manifest = json.loads(stream.read().decode("utf-8-sig"))
+        public_key = bg_update.UPDATE_MANIFEST_PUBLIC_KEY_B64
+        altered_manifests = []
+        for field, value in (
+            ("runtime_version", "99.0.0"),
+            ("asset_name", "untrusted.zip"),
+            ("asset_sha256", "0" * 64),
+            ("repository", "attacker/repository"),
+            ("release_api_url", "https://api.github.com/repos/attacker/repository/releases/tags/v99"),
+        ):
+            altered = dict(manifest)
+            altered[field] = value
+            altered_manifests.append(altered)
+        altered = dict(manifest)
+        altered["unexpected_field"] = "must also be signed"
+        altered_manifests.append(altered)
+        altered = dict(manifest)
+        signature = bytearray(base64.b64decode(altered["signature"].encode("ascii")))
+        signature[0] ^= 1
+        altered["signature"] = base64.b64encode(bytes(signature)).decode("ascii")
+        altered_manifests.append(altered)
+        for field, value in (
+            ("signature_algorithm", "Ed25519"),
+            ("signature_schema_version", 2),
+        ):
+            altered = dict(manifest)
+            altered[field] = value
+            altered_manifests.append(altered)
+        altered = dict(manifest)
+        altered.pop("signature")
+        altered_manifests.append(altered)
+
+        for altered in altered_manifests:
+            with self.assertRaises(bg_update.IntegrityError):
+                bg_update.verify_update_manifest_signature(altered, public_key)
+
+    def test_update_client_uses_compiled_public_key_when_config_omits_it(self):
+        client = object.__new__(bg_update.UpdateClient)
+        client.config = {}
+        self.assertEqual(
+            bg_update.UPDATE_MANIFEST_PUBLIC_KEY_B64,
+            client._manifest_public_key(),
+        )
+        with open(
+            os.path.join(os.path.dirname(PLUGIN_ROOT), os.pardir, "updates", "stable.json"),
+            "rb",
+        ) as stream:
+            manifest = json.loads(stream.read().decode("utf-8-sig"))
+        self.assertTrue(
+            bg_update.verify_update_manifest_signature(
+                manifest, client._manifest_public_key()
+            )
+        )
+
+    def test_update_client_rechecks_signature_and_forwards_configured_limits(self):
+        with open(
+            os.path.join(os.path.dirname(PLUGIN_ROOT), os.pardir, "updates", "stable.json"),
+            "rb",
+        ) as stream:
+            manifest = json.loads(stream.read().decode("utf-8-sig"))
+        client = bg_update.UpdateClient(plugin_root=PLUGIN_ROOT)
+        fake_result = bg_update.UpdateResult("1.3.14", "unused", "1.3.13", True)
+        spec = bg_update.UpdateSpec.from_mapping(manifest)
+        with mock.patch.object(client, "_load_manifest", return_value=(manifest, spec)):
+            checked = client.check_for_update("1.3.13", maya_version="2024")
+        self.assertTrue(checked["available"])
+        self.assertEqual(manifest, checked[bg_update.VERIFIED_MANIFEST_FIELD])
+        with mock.patch.object(
+            bg_update, "update_from_github_release", return_value=fake_result
+        ) as install:
+            client.download_and_install(checked, maya_version="2024")
+        kwargs = install.call_args[1]
+        self.assertEqual(100 * 1024 * 1024, kwargs["max_archive_bytes"])
+        self.assertEqual(500 * 1024 * 1024, kwargs["max_extracted_bytes"])
+        self.assertEqual(500 * 1024 * 1024, kwargs["max_file_bytes"])
+        self.assertTrue(kwargs["require_declared_size"])
+
+        tampered = dict(manifest)
+        tampered["asset_sha256"] = "0" * 64
+        with self.assertRaises(bg_update.IntegrityError):
+            client.download_and_install(tampered, maya_version="2024")
+
+        tampered_checked = dict(checked)
+        tampered_signed = dict(checked[bg_update.VERIFIED_MANIFEST_FIELD])
+        tampered_signed["asset_sha256"] = "0" * 64
+        tampered_checked[bg_update.VERIFIED_MANIFEST_FIELD] = tampered_signed
+        with self.assertRaises(bg_update.IntegrityError):
+            client.download_and_install(tampered_checked, maya_version="2024")
+
+    def test_unsigned_manifest_is_rejected(self):
+        with self.assertRaises(bg_update.IntegrityError):
+            bg_update.verify_update_manifest_signature(
+                {"version": "1.3.8"}, base64.b64encode(b"x" * 32).decode("ascii")
+            )
+
+    def test_configured_limits_only_tighten_hard_caps(self):
+        limits = bg_update._configured_update_limits(
+            {
+                "max_download_mb": 100,
+                "max_extract_mb": 500,
+                "asset_size_required": True,
+            }
+        )
+        self.assertEqual(100 * 1024 * 1024, limits["max_archive_bytes"])
+        self.assertEqual(500 * 1024 * 1024, limits["max_extracted_bytes"])
+        self.assertEqual(500 * 1024 * 1024, limits["max_file_bytes"])
+        self.assertTrue(limits["require_declared_size"])
 
     def test_cancelled_download_closes_response_and_removes_partial_file(self):
         payload = b"download body"

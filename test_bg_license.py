@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -23,7 +24,7 @@ def runtime_under_test():
     active_path = os.path.join(PLUGIN_ROOT, "active_version.json")
     with io.open(active_path, "r", encoding="utf-8-sig") as stream:
         active_version = str(json.load(stream).get("active_version") or "")
-    for version in ("1.3.14", active_version):
+    for version in ("1.3.15", active_version, "1.3.14"):
         candidate = os.path.join(PLUGIN_ROOT, "versions", version)
         if version and os.path.isfile(os.path.join(candidate, "bg_license.py")):
             return candidate
@@ -92,6 +93,27 @@ class LicenseTests(unittest.TestCase):
         with self.assertRaises(bg_license.LicenseError):
             bg_license.verify_license_payload(data)
 
+    def test_ed25519_rejects_invalid_and_noncanonical_points(self):
+        noncanonical_zero_x = ((1 << 255) | 1).to_bytes(32, "little")
+        with self.assertRaises(ValueError):
+            bg_license._decode_point(noncanonical_zero_x)
+
+        invalid_y = None
+        for candidate in range(2, 256):
+            encoded = candidate.to_bytes(32, "little")
+            try:
+                bg_license._decode_point(encoded)
+            except ValueError as exc:
+                if "Invalid Ed25519 point" in str(exc):
+                    invalid_y = encoded
+                    break
+        self.assertIsNotNone(invalid_y)
+        self.assertFalse(bg_license.ed25519_verify(
+            self.public,
+            invalid_y + (b"\x00" * 32),
+            b"invalid point",
+        ))
+
     def test_dpapi_save_load_and_online_success(self):
         path = os.path.join(self.tempdir, "license.dat")
         data = self.license_data()
@@ -119,6 +141,9 @@ class LicenseTests(unittest.TestCase):
     def test_native_handshake_payload(self):
         captured = {}
         class NativeStub(object):
+            def deactivate_license(self):
+                pass
+
             def activate_signed_license(self, product_id, license_id, machine, expires_at, proof):
                 captured.update({"product_id": product_id, "license_id": license_id, "machine": machine, "expires_at": expires_at, "proof": proof})
                 return True
@@ -179,6 +204,150 @@ class LicenseTests(unittest.TestCase):
                     bg_license.validate(path)
         self.assertEqual(original, read_bytes(path))
         self.assertFalse(any(".tmp-" in name for name in os.listdir(self.tempdir)))
+
+    def test_repeated_save_does_not_refresh_offline_grace(self):
+        path = os.path.join(self.tempdir, "license.dat")
+        data = self.license_data("NO-REFRESH")
+        bg_license.save_license(data, path)
+        online_at = 2000000000
+        with mock.patch.object(bg_license.time, "time", return_value=online_at):
+            with mock.patch.object(
+                bg_license, "_fetch_status", return_value={"online": True, "revoked_ids": []}
+            ):
+                bg_license.validate(path)
+        _, before = bg_license.load_license(path)
+        self.assertEqual(online_at, before["last_online_at"])
+
+        with mock.patch.object(bg_license.time, "time", return_value=online_at + 86400):
+            bg_license.save_license(data, path)
+        _, after = bg_license.load_license(path)
+        self.assertEqual(online_at, after["last_online_at"])
+
+    def test_plaintext_timestamp_tampering_is_ignored(self):
+        path = os.path.join(self.tempdir, "license.dat")
+        bg_license.save_license(self.license_data("OUTER-TAMPER"), path)
+        with io.open(path, "r", encoding="utf-8") as stream:
+            envelope = json.load(stream)
+        envelope["last_online_at"] = int(time.time())
+        bg_license._atomic_write_json(path, envelope)
+
+        with mock.patch.object(
+            bg_license, "_fetch_status", side_effect=bg_license.LicenseNetworkError("offline")
+        ):
+            with self.assertRaises(bg_license.LicenseError):
+                bg_license.validate(path)
+        _, state = bg_license.load_license(path)
+        self.assertEqual(0, state["last_online_at"])
+
+    def test_legacy_envelope_migrates_with_existing_grace(self):
+        path = os.path.join(self.tempdir, "license.dat")
+        data = self.license_data("LEGACY")
+        now = int(time.time())
+        legacy_online_at = now - 3600
+        protected = bg_license.bg_credentials._protect(bg_license._canonical_json(data))
+        bg_license._atomic_write_json(path, {
+            "schema_version": 1,
+            "payload": base64.b64encode(protected).decode("ascii"),
+            "last_online_at": legacy_online_at,
+        })
+        os.utime(path, (now, now))
+
+        with mock.patch.object(bg_license.time, "time", return_value=now):
+            with mock.patch.object(
+                bg_license, "_fetch_status", side_effect=bg_license.LicenseNetworkError("offline")
+            ):
+                result = bg_license.validate(path)
+        self.assertFalse(result["online"])
+        _, state = bg_license.load_license(path)
+        self.assertFalse(state["legacy"])
+        self.assertEqual(legacy_online_at, state["last_online_at"])
+        with io.open(path, "r", encoding="utf-8") as stream:
+            migrated_envelope = json.load(stream)
+        self.assertEqual(bg_license.STORAGE_SCHEMA, migrated_envelope["schema_version"])
+        self.assertNotIn("last_online_at", migrated_envelope)
+
+    def test_offline_grace_uses_smallest_signed_and_configured_limit(self):
+        data = self.license_data("OFFLINE-LIMIT")
+        unsigned = dict(data)
+        unsigned.pop("signature")
+        unsigned["offline_days"] = 12
+        data = dict(unsigned)
+        data["signature"] = base64.b64encode(
+            self.private.sign(bg_license._canonical_json(unsigned))
+        ).decode("ascii")
+        self.assertEqual(7, bg_license._bounded_offline_days(data, {"offline_days": 7}))
+        self.assertEqual(12, bg_license._bounded_offline_days(data, {"offline_days": 60}))
+        unsigned["offline_days"] = 60
+        self.assertEqual(14, bg_license._bounded_offline_days(unsigned, {"offline_days": 60}))
+
+    def test_revoked_validation_deactivates_native_gate(self):
+        class NativeStub(object):
+            def __init__(self):
+                self.active = True
+
+            def deactivate_license(self):
+                self.active = False
+
+            def activate_signed_license(self, *unused_args):
+                self.active = True
+                return True
+
+        path = os.path.join(self.tempdir, "license.dat")
+        bg_license.save_license(self.license_data("REVOKED-NATIVE"), path)
+        native = NativeStub()
+        with mock.patch.dict(sys.modules, {"bg_math_core": native}):
+            with mock.patch.object(
+                bg_license,
+                "_fetch_status",
+                return_value={"online": True, "revoked_ids": ["REVOKED-NATIVE"]},
+            ):
+                with self.assertRaises(bg_license.LicenseError):
+                    bg_license.validate(path)
+        self.assertFalse(native.active)
+
+    def test_install_guard_requires_deactivation_interface(self):
+        class OldNativeStub(object):
+            def activate_signed_license(self, *unused_args):
+                return True
+
+            def require_authorized(self):
+                return None
+
+        with mock.patch.dict(sys.modules, {"bg_math_core": OldNativeStub()}):
+            with self.assertRaises(bg_license.LicenseRuntimeError):
+                bg_license.install_native_guard()
+
+    def test_install_guard_requires_new_performance_interfaces(self):
+        class NativeStub(object):
+            def activate_signed_license(self, *unused_args):
+                return True
+
+            def deactivate_license(self):
+                return None
+
+            def require_authorized(self):
+                return None
+
+        native = NativeStub()
+        legacy_entries = (
+            "calculate_bidirectional_avg_distance",
+            "calculate_avg_distance",
+            "calculate_min_distance",
+            "check_mesh_collision",
+            "are_symmetric",
+            "resolve_hp_collision",
+            "calculate_vertex_owner_scores",
+            "analyze_mesh_shape",
+            "generate_fingerprint_data",
+        )
+        for name in legacy_entries:
+            setattr(native, name, lambda *unused_args: None)
+        with mock.patch.dict(sys.modules, {"bg_math_core": native}):
+            with self.assertRaisesRegex(
+                bg_license.LicenseRuntimeError,
+                "calculate_coverage_stats.*PointCloudIndex",
+            ):
+                bg_license.install_native_guard()
 
     def test_native_activation_failure_does_not_leave_python_session(self):
         class NativeStub(object):

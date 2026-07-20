@@ -177,6 +177,6 @@ exit /b 1
 :verify_plugin
 if not exist "%~1\launcher.py" exit /b 1
 if not exist "%~1\active_version.json" exit /b 1
-if not exist "%~1\versions\1.3.14\bg_main_window.py" exit /b 1
-for %%V in (2022 2023 2024 2025 2026 2027) do if not exist "%~1\versions\1.3.14\bin\%%V\bg_math_core.pyd" exit /b 1
+if not exist "%~1\versions\1.3.15\bg_main_window.py" exit /b 1
+for %%V in (2022 2023 2024 2025 2026 2027) do if not exist "%~1\versions\1.3.15\bin\%%V\bg_math_core.pyd" exit /b 1
 exit /b 0

@@ -1,8 +1,6 @@
 from __future__ import absolute_import, division, print_function
 
 import importlib.util
-import io
-import json
 import os
 import sys
 import tempfile
@@ -16,20 +14,19 @@ except ImportError:  # pragma: no cover
 
 
 PLUGIN_ROOT = os.path.join(os.path.dirname(__file__), "plugin", "Bake_Groups")
+RUNTIME_VERSION_UNDER_TEST = "1.3.15"
 
 
 def runtime_under_test():
-    with io.open(
-        os.path.join(PLUGIN_ROOT, "active_version.json"),
-        "r",
-        encoding="utf-8-sig",
-    ) as stream:
-        active_version = str(json.load(stream).get("active_version") or "")
-    for version in ("1.3.14", active_version):
-        candidate = os.path.join(PLUGIN_ROOT, "versions", version)
-        if version and os.path.isfile(os.path.join(candidate, "launcher.py")):
-            return candidate
-    raise RuntimeError("No Bake Master runtime is available for launcher tests")
+    candidate = os.path.join(
+        PLUGIN_ROOT, "versions", RUNTIME_VERSION_UNDER_TEST
+    )
+    if os.path.isfile(os.path.join(candidate, "launcher.py")):
+        return candidate
+    raise RuntimeError(
+        "Bake Master %s runtime is unavailable for launcher tests"
+        % RUNTIME_VERSION_UNDER_TEST
+    )
 
 
 def load_launcher_module():
@@ -68,13 +65,15 @@ launcher = load_launcher_module()
 class LauncherRollbackTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.mkdtemp(prefix="bg-launcher-test-")
-        self.runtime_dir = os.path.join(self.tempdir, "versions", "1.3.14")
+        self.runtime_dir = os.path.join(
+            self.tempdir, "versions", RUNTIME_VERSION_UNDER_TEST
+        )
         os.makedirs(self.runtime_dir)
         self.active_path = os.path.join(self.tempdir, "active_version.json")
         self.active_config = {
-            "active_version": "1.3.14",
-            "pending_version": "1.3.14",
-            "previous_version": "1.3.13",
+            "active_version": RUNTIME_VERSION_UNDER_TEST,
+            "pending_version": RUNTIME_VERSION_UNDER_TEST,
+            "previous_version": "1.3.14",
         }
 
     def tearDown(self):
