@@ -13,6 +13,9 @@ import time
 sys.path.insert(0, os.environ["BG_NATIVE_TEST_BIN"])
 import bg_math_core
 
+assert callable(getattr(bg_math_core, "calculate_coverage_stats", None))
+assert callable(getattr(bg_math_core, "PointCloudIndex", None))
+
 
 def activate():
     machine = bg_math_core.machine_hash()
@@ -60,6 +63,9 @@ for count_a, count_b in ((1, 1), (7, 11), (40, 55), (137, 211)):
     expected_avg = brute_avg(source, target)
     expected_min = brute_min(source, target)
     assert abs(bg_math_core.calculate_avg_distance(source, target) - expected_avg) < 1e-9
+    target_index = bg_math_core.PointCloudIndex(target)
+    assert target_index.target_point_count == count_b
+    assert abs(target_index.average_distance(source) - expected_avg) < 1e-9
     assert abs(bg_math_core.calculate_min_distance(source, target) - expected_min) < 1e-9
 
 translated_a = [10000000.0, 10000000.0, 10000000.0]

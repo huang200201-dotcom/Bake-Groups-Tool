@@ -14,5 +14,6 @@
     "max_extract_mb": 500,
     "manifest_path": "updates/stable.json",
     "manifest_ref": "main",
+    "manifest_public_key_b64": "Qtje+76cWuKRMpo+a6tQVMMDo9UnHeSDRLHBe0+yU4w=",
     "asset_size_required": true
 }

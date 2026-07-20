@@ -122,8 +122,13 @@ try {
         $utf8NoBom
     )
 
-    $installReadme = Join-Path $packageRoot '安装说明.txt'
-    if (Test-Path -LiteralPath $installReadme -PathType Leaf) {
+    # Keep the script ASCII-only so Windows PowerShell 5.1 does not corrupt
+    # the non-ASCII installer filename when this UTF-8 script has no BOM.
+    $installReadmes = @(Get-ChildItem -LiteralPath $packageRoot -File -Filter '*.txt' | Where-Object {
+        $_.Name -ne 'SHA256.txt'
+    })
+    if ($installReadmes.Count -eq 1) {
+        $installReadme = $installReadmes[0].FullName
         $readmeLines = [System.IO.File]::ReadAllLines($installReadme)
         if ($readmeLines.Count -gt 0) {
             $readmeLines[0] = "Bake Master $Version"

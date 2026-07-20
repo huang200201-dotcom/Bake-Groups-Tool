@@ -93,7 +93,10 @@ def extract_function(filename, function_name, namespace):
             )
         )
     node = copy.deepcopy(matches[0])
-    module_tree = ast.Module(body=[node])
+    try:
+        module_tree = ast.Module(body=[node], type_ignores=[])
+    except TypeError:  # Python 3.7
+        module_tree = ast.Module(body=[node])
     ast.fix_missing_locations(module_tree)
     exec(compile(module_tree, path, "exec"), namespace)
     return namespace[function_name]
