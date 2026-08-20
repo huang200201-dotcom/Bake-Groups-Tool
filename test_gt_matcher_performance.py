@@ -11,7 +11,7 @@ RUNTIME = os.path.join(
     "plugin",
     "Bake_Groups",
     "versions",
-    "1.3.15",
+    "1.3.17",
 )
 
 

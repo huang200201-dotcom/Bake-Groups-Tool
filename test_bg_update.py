@@ -29,7 +29,7 @@ def runtime_under_test():
         active_version = str(json.load(stream).get("active_version") or "")
     # An unreleased development runtime intentionally takes precedence so the
     # tests cannot silently keep exercising the currently published version.
-    candidates = ("1.3.15", active_version)
+    candidates = ("1.3.17", active_version)
     for version in candidates:
         candidate = os.path.join(PLUGIN_ROOT, "versions", version)
         if version and os.path.isfile(os.path.join(candidate, "bg_update.py")):

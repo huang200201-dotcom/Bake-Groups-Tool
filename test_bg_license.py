@@ -24,7 +24,7 @@ def runtime_under_test():
     active_path = os.path.join(PLUGIN_ROOT, "active_version.json")
     with io.open(active_path, "r", encoding="utf-8-sig") as stream:
         active_version = str(json.load(stream).get("active_version") or "")
-    for version in ("1.3.15", active_version, "1.3.14"):
+    for version in ("1.3.17", active_version, "1.3.16"):
         candidate = os.path.join(PLUGIN_ROOT, "versions", version)
         if version and os.path.isfile(os.path.join(candidate, "bg_license.py")):
             return candidate
