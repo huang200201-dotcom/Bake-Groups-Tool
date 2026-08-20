@@ -1,7 +1,7 @@
 {
-  "asset_name": "Bake_Groups_Tool_1.3.16_Windows_x64.zip",
-  "asset_sha256": "F7C71EBDA0D4DAA81BCDC9C6E3B6371E199FA3380C16DA15B72C139F36B63A26",
-  "asset_size": 2020545,
+  "asset_name": "Bake_Groups_Tool_1.3.17_Windows_x64.zip",
+  "asset_sha256": "B9C307EEBDBF486F34F2FE00DF9AD221051A7827212E6A2BE87E70618E52EE2E",
+  "asset_size": 2020979,
   "channel": "stable",
   "maya_versions": [
     "2022",
@@ -14,14 +14,14 @@
   "package_manifest": "UPDATE_PACKAGE.json",
   "platform": "windows-x64",
   "product": "Bake Master",
-  "published_at": "2026-07-20T03:48:13Z",
-  "release_api_url": "https://api.github.com/repos/huang200201-dotcom/Bake-Groups-License-Status/releases/tags/v1.3.16",
+  "published_at": "2026-08-20T14:22:28Z",
+  "release_api_url": "https://api.github.com/repos/huang200201-dotcom/Bake-Groups-License-Status/releases/tags/v1.3.17",
   "repository": "huang200201-dotcom/Bake-Groups-License-Status",
-  "runtime_version": "1.3.16",
+  "runtime_version": "1.3.17",
   "schema_version": 1,
-  "signature": "iPpb21cdeZwwJ5t+LtUnU0G5+Ic50kzD90WYkBqhuxeOFDcOrBDEO89K7kdSu/RWnheUgrbK6tn7rBNSRE7IAQ==",
+  "signature": "1zaECOfR4BiRUrB9l/6RD9SxAydCYERyaHEddwHiD193u0r00J9PDX2omnS8fwg5CXOprYJ4W+8xKi10mP8cAQ==",
   "signature_algorithm": "ed25519",
   "signature_schema_version": 1,
-  "tag": "v1.3.16",
-  "version": "1.3.16"
+  "tag": "v1.3.17",
+  "version": "1.3.17"
 }
