@@ -4,7 +4,7 @@ Bake Master 是 Autodesk Maya 的高低模烘焙分组插件。本仓库为私�
 
 ## 当前版本
 
-- 插件与运行时：`1.3.15`
+- 插件与运行时：`1.3.17`
 - Maya：2022-2027（Windows x64）
 - Python ABI：3.7 / 3.9 / 3.10 / 3.11 / 3.13
 - 授权：Ed25519 签名许可证、机器绑定、Windows DPAPI、14 天离线宽限
@@ -25,7 +25,7 @@ Bake Master 是 Autodesk Maya 的高低模烘焙分组插件。本仓库为私�
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 `
-  -Version 1.3.15 -RuntimeVersion 1.3.15 `
+  -Version 1.3.17 -RuntimeVersion 1.3.17 `
   -Owner huang200201-dotcom -Repository Bake-Groups-License-Status
 ```
 

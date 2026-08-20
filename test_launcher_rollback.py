@@ -14,7 +14,7 @@ except ImportError:  # pragma: no cover
 
 
 PLUGIN_ROOT = os.path.join(os.path.dirname(__file__), "plugin", "Bake_Groups")
-RUNTIME_VERSION_UNDER_TEST = "1.3.15"
+RUNTIME_VERSION_UNDER_TEST = "1.3.17"
 
 
 def runtime_under_test():

@@ -13,7 +13,7 @@ import unittest
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-RUNTIME = os.path.join(ROOT, "plugin", "Bake_Groups", "versions", "1.3.15")
+RUNTIME = os.path.join(ROOT, "plugin", "Bake_Groups", "versions", "1.3.17")
 
 
 def load_top_level(filename, names, namespace):

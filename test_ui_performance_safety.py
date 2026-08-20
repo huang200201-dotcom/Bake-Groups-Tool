@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover
 
 REPO_ROOT = os.path.dirname(__file__)
 PLUGIN_ROOT = os.path.join(REPO_ROOT, "plugin", "Bake_Groups")
-RUNTIME_ROOT = os.path.join(PLUGIN_ROOT, "versions", "1.3.15")
+RUNTIME_ROOT = os.path.join(PLUGIN_ROOT, "versions", "1.3.17")
 MAIN_WINDOW_PATH = os.path.join(RUNTIME_ROOT, "bg_main_window.py")
 CORE_PATH = os.path.join(RUNTIME_ROOT, "bg_core.py")
 MIXINS_PATH = os.path.join(RUNTIME_ROOT, "bg_mixins.py")
