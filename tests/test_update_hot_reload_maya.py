@@ -5,6 +5,7 @@ is replaced by in-memory release bytes; filesystem, Qt lifecycle and C++ loading
 remain real. Only Maya's dock placement is replaced for standalone operation.
 """
 import hashlib
+import ast
 import importlib
 import importlib.util
 import io
@@ -39,10 +40,12 @@ class InstalledHotReloadTests(unittest.TestCase):
         cmds.optionVar(intValue=('BakeMasterAutoUpdate', 0))
 
         package = Path(package_path)
+        base_package_path = os.environ.get('BG_UPDATE_TEST_BASE_PACKAGE')
+        base_package = Path(base_package_path) if base_package_path else package
         spec = importlib.util.spec_from_file_location('hot_reload_installer', package / '安装到Maya.py')
         installer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(installer)
-        runtime = Path(installer.install_package(str(package), str(root / 'scripts'))['target'])
+        runtime = Path(installer.install_package(str(base_package), str(root / 'scripts'))['target'])
         sys.path.insert(0, str(runtime))
         self.addCleanup(lambda: sys.path.remove(str(runtime)))
         launcher = importlib.import_module('launcher')
@@ -63,6 +66,13 @@ class InstalledHotReloadTests(unittest.TestCase):
             parts = [int(part) for part in version.split('.')]
             parts[-1] += 1
             next_version = '.'.join(map(str, parts))
+            if base_package_path:
+                tree = ast.parse((package / 'Bake_Groups/bg_version.py').read_text(encoding='utf-8-sig'))
+                next_version = next(ast.literal_eval(node.value) for node in tree.body
+                                    if isinstance(node, ast.Assign) and any(
+                                        isinstance(target, ast.Name) and target.id == '__version__'
+                                        for target in node.targets))
+                self.assertNotEqual(next_version, version, 'Use a different previous release as the base')
             binary = Path(native.__file__)
             old_binary_bytes = binary.read_bytes()
             old_binary_mtime = binary.stat().st_mtime_ns

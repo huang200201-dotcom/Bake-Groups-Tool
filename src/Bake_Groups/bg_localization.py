@@ -23,6 +23,43 @@ _DEFAULT_LANG = "en"
 _CURRENT_LANG = None
 _LANGUAGE_OPTION_VAR = "BakeGroupsLanguage"
 
+_WORKFLOW_TEXTS = {
+    'en': {
+        'Automatic Bake Groups': 'Automatic Bake Groups',
+        'Automatic Bake Groups: grouping high-poly meshes, then matching low-poly meshes.': 'Automatic Bake Groups: grouping high-poly meshes, then matching low-poly meshes.',
+        'Automatic Bake Groups: matching low-poly meshes.': 'Automatic Bake Groups: matching low-poly meshes.',
+        'Automatic Bake Groups complete.': 'Automatic Bake Groups complete.',
+        'Wait for automatic grouping to finish before switching asset tasks.': 'Wait for automatic grouping to finish before switching asset tasks.',
+        'No unlocked HP groups are available for low-poly matching.': 'No unlocked HP groups are available for low-poly matching.',
+        'Run the check now, or continue automatic grouping without checking?': 'Run the check now, or continue automatic grouping without checking?',
+        'No HP subgroups found. Run Automatic Bake Groups first.': 'No HP subgroups found. Run Automatic Bake Groups first.',
+        'Combine Fin: no LP subgroups were combined. Run Automatic Bake Groups first or check LP subgroup names.': 'Combine Fin: no LP subgroups were combined. Run Automatic Bake Groups first or check LP subgroup names.',
+        'Run Automatic Bake Groups or rename/create matching LP subgroups before Combine Fin.': 'Run Automatic Bake Groups or rename/create matching LP subgroups before Combine Fin.',
+        'No debug log to save yet. Run Automatic Bake Groups first.': 'No debug log to save yet. Run Automatic Bake Groups first.',
+    },
+    'zh-CN': {
+        'Automatic Bake Groups': '自动划分烘焙组',
+        'Automatic Bake Groups: grouping high-poly meshes, then matching low-poly meshes.': '自动划分烘焙组：先划分高模，再匹配低模。',
+        'Automatic Bake Groups: matching low-poly meshes.': '自动划分烘焙组：正在匹配低模。',
+        'Automatic Bake Groups complete.': '自动划分烘焙组完成。',
+        'Wait for automatic grouping to finish before switching asset tasks.': '请等待自动划分完成后再切换资产任务。',
+        'No unlocked HP groups are available for low-poly matching.': '没有可供低模匹配的未锁定高模组。',
+        'Run the check now, or continue automatic grouping without checking?': '立即检查，还是跳过检查继续自动划分烘焙组？',
+        'No HP subgroups found. Run Automatic Bake Groups first.': '未找到高模子组，请先运行“自动划分烘焙组”。',
+        'Combine Fin: no LP subgroups were combined. Run Automatic Bake Groups first or check LP subgroup names.': '最终生成未合并任何低模子组。请先运行“自动划分烘焙组”，或检查低模子组名称。',
+        'Run Automatic Bake Groups or rename/create matching LP subgroups before Combine Fin.': '最终生成前，请运行“自动划分烘焙组”，或重命名／创建相匹配的低模子组。',
+        'No debug log to save yet. Run Automatic Bake Groups first.': '暂无可保存的调试日志。请先运行“自动划分烘焙组”。',
+    },
+    'ja': {'Automatic Bake Groups': 'ベイクグループの自動作成'},
+    'ru': {'Automatic Bake Groups': 'Автоматические группы запекания'},
+}
+_WORKFLOW_TOOLTIP = {
+    'en': 'Group high-poly meshes, then automatically match low-poly meshes in the same asset task. Each completed stage can be undone separately.',
+    'zh-CN': '一次点击，先划分高模，再自动匹配同一资产任务的低模。已完成的两个阶段可分别撤销。',
+    'ja': '高ポリゴンを分類し、同じアセットの低ポリゴンを自動照合します。完了した各段階は個別に取り消せます。',
+    'ru': 'Сгруппировать высокополигональные модели, затем сопоставить низкополигональные в той же задаче. Каждый этап отменяется отдельно.',
+}
+
 # Update controls ship with the runtime so staged Python updates can introduce
 # their labels even when a user's optional translation files are older.
 _UPDATE_TEXTS = {
@@ -174,6 +211,9 @@ def load_language(lang=None):
             print("Bake Master localization load failed for '{}': {}".format(path, exc))
 
     data['texts'].update(_UPDATE_TEXTS.get(lang, _UPDATE_TEXTS['en']))
+    data['texts'].update(_WORKFLOW_TEXTS['en'])
+    data['texts'].update(_WORKFLOW_TEXTS.get(lang, {}))
+    data['tooltips']['Automatic Bake Groups'] = _WORKFLOW_TOOLTIP.get(lang, _WORKFLOW_TOOLTIP['en'])
     tips = _UPDATE_TOOLTIPS.get(lang, _UPDATE_TOOLTIPS['en'])
     data['tooltips'].update(dict(zip(
         ('Automatic Updates', 'Manual Update', 'Visit Repository Website'), tips)))

@@ -219,6 +219,7 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
         self.progress_dlg_lp = None
         self._hp_task_finalized = True
         self._lp_task_finalized = True
+        self._auto_grouping_context = None
         self.update_worker = None
         self._update_manual = False
         self._pending_update = None
@@ -501,17 +502,11 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
 
         s_layout = QtWidgets.QGridLayout()
         s_layout.setHorizontalSpacing(8)
-        self.btn_run_hp = QtWidgets.QPushButton(" Analyze HP")
+        self.btn_run_hp = QtWidgets.QPushButton("Automatic Bake Groups")
         self.btn_run_hp.setProperty("role", "primary")
         self.btn_run_hp.setMinimumHeight(40)
-        self.btn_run_hp.clicked.connect(lambda: self.run_hp_analysis(None))
-
-        self.btn_run_lp = QtWidgets.QPushButton(" Assign LP Meshes")
-        self.btn_run_lp.setProperty("role", "success")
-        self.btn_run_lp.setMinimumHeight(40)
-        self.btn_run_lp.clicked.connect(self.run_lp_matching)
-        s_layout.addWidget(self.btn_run_hp, 0, 0)
-        s_layout.addWidget(self.btn_run_lp, 0, 1)
+        self.btn_run_hp.clicked.connect(self.run_auto_grouping)
+        s_layout.addWidget(self.btn_run_hp, 0, 0, 1, 2)
         s_layout.setColumnStretch(0, 1)
         s_layout.setColumnStretch(1, 1)
         analysis_layout.addLayout(s_layout)
@@ -1711,7 +1706,7 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
         debug_lines = list(getattr(self, 'last_debug_lines', []) or [])
         action_lines = list(getattr(self, 'user_action_lines', []) or [])
         if not debug_lines and not action_lines:
-            self.log(bg_l10n.text("No debug log to save yet. Run Analyze HP first."), "orange")
+            self.log(bg_l10n.text("No debug log to save yet. Run Automatic Bake Groups first."), "orange")
             return
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1950,6 +1945,8 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
         self._restore_preview_after_save(save_succeeded=True)
 
     def _cancel_scene_analysis(self, revert_prep):
+        if getattr(self, '_auto_grouping_context', None):
+            self._finish_auto_grouping()
         if revert_prep:
             for method_name in ('_cancel_hp_analysis', '_cancel_lp_matching'):
                 try:
@@ -2974,7 +2971,8 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
             self.update_worker = None
 
     def _update_ui_busy(self):
-        if self._is_closing or self.update_worker is not None:
+        if (self._is_closing or self.update_worker is not None or
+                getattr(self, '_auto_grouping_context', None)):
             return True
         for worker in list(vars(self).values()):
             if isinstance(worker, QtCore.QThread):
@@ -3228,6 +3226,10 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
                 widget.setProperty("bg_status_tip", "")
 
     def activate_root(self, pair):
+        context = getattr(self, '_auto_grouping_context', None)
+        if context and pair.get('id') != context['pair_id']:
+            self.log(bg_l10n.text('Wait for automatic grouping to finish before switching asset tasks.'), 'orange')
+            return
         self._syncing_grouping_mode = True
         try:
             self.set_grouping_mode(pair.get('grouping_mode', 'legacy_compact'))

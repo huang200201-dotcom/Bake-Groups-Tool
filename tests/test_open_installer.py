@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import tempfile
 import types
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('open_installer', ROOT / 'installer' / '安装到Maya.py')
 installer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(installer)
+VERSION = runpy.run_path(str(ROOT / 'src/Bake_Groups/bg_version.py'))['__version__']
 
 
 def write_manifest(package):
@@ -28,7 +30,7 @@ def make_package(package):
     payload = package / 'Bake_Groups'
     payload.mkdir(parents=True)
     for name in installer.REQUIRED_FILES:
-        (payload / name).write_text('__version__ = "1.0.1"\n' if name == 'bg_version.py' else '# open fixture\n', encoding='utf-8')
+        (payload / name).write_text('__version__ = "{}"\n'.format(VERSION) if name == 'bg_version.py' else '# open fixture\n', encoding='utf-8')
     for year in installer.SUPPORTED_MAYA:
         native = payload / 'bin' / year / 'bg_math_core.pyd'
         native.parent.mkdir(parents=True)
@@ -77,7 +79,7 @@ class OpenInstallerTests(unittest.TestCase):
         (self.target / 'bg_version.py').write_text('__version__ = "1.0.0"\n')
         (self.target / 'launcher.py').write_bytes(b'# 1.0.0 fixture without an updater')
         self.install()
-        self.assertIn('1.0.1', (self.target / 'bg_version.py').read_text())
+        self.assertIn(VERSION, (self.target / 'bg_version.py').read_text())
         self.assertEqual((self.target / 'bg_update.py').read_bytes(), (self.payload / 'bg_update.py').read_bytes())
         self.assert_no_transaction_files()
 
@@ -110,7 +112,7 @@ class OpenInstallerTests(unittest.TestCase):
         self.install()
         self.assertFalse((self.target / 'versions').exists())
         self.assertFalse((self.target / 'active_version.json').exists())
-        self.assertIn('1.0.1', (self.target / 'bg_version.py').read_text())
+        self.assertIn(VERSION, (self.target / 'bg_version.py').read_text())
         self.assertEqual(scene.read_bytes(), b'artist scene fixture')
         self.assertEqual(license_record.read_bytes(), b'synthetic user record; not an actual license')
         self.assertEqual(other.read_bytes(), b'# user script')

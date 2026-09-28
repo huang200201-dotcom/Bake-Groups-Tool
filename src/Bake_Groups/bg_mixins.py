@@ -119,6 +119,126 @@ def build_surface_proxy(mesh_path, max_triangles=240, face_indices=None):
 class HPAnalysisMixin:
     """Methods for High-poly analysis and auto-grouping."""
 
+    def _auto_grouping_pair(self, token):
+        context = getattr(self, '_auto_grouping_context', None)
+        if (not context or context['token'] != token or self._is_closing or
+                self._scene_change_pending or context['generation'] != self._scene_generation):
+            return None
+        pair = next((p for p in self.root_pairs if p.get('id') == context['pair_id']), None)
+        if (not pair or pair is not context['pair_ref'] or pair.get('hp_uuid') != context['hp_uuid'] or
+                pair.get('lp_uuid') != context['lp_uuid']):
+            return None
+        hp, lp, _ = self.core.resolve_main_nodes(pair)
+        if not hp or not lp:
+            return None
+        # MayaCore may still cache an old path now occupied by another node.
+        # Verify the actual scene UUID, not only the session's stored UUID.
+        if (cmds.ls(hp, uuid=True) != [context['hp_uuid']] or
+                cmds.ls(lp, uuid=True) != [context['lp_uuid']]):
+            return None
+        if (tuple(cmds.ls(hp, long=True) or []) != context['hp_path'] or
+                tuple(cmds.ls(lp, long=True) or []) != context['lp_path']):
+            return None
+        return pair
+
+    def _finish_auto_grouping(self, token=None):
+        context = getattr(self, '_auto_grouping_context', None)
+        if context and (token is None or context['token'] == token):
+            self._auto_grouping_context = None
+            self._set_analysis_controls_enabled(not self._analysis_worker_running())
+
+    def _usable_hp_groups(self, pair):
+        hp, _lp, _ = self.core.resolve_main_nodes(pair)
+        for group in cmds.listRelatives(hp, children=True, fullPath=True, type='transform') or []:
+            if (bg_final_groups.subgroup_name(group, 'HP') in pair.get('locked', []) or
+                    group.rsplit('|', 1)[-1] in pair.get('locked', [])):
+                continue
+            if cmds.listRelatives(group, shapes=True, type='mesh', noIntermediate=True):
+                continue
+            attr = group + '.' + bg_core.BakeConfig.ATTR_BAKE_GROUP
+            if (re.search(r'_HP\d*$', group.rsplit('|', 1)[-1]) or
+                    (cmds.objExists(attr) and cmds.getAttr(attr) == 'HP')):
+                shapes = cmds.listRelatives(group, allDescendents=True, fullPath=True, type='mesh') or []
+                if any(not cmds.getAttr(shape + '.intermediateObject') for shape in shapes):
+                    return True
+        return False
+
+    def run_auto_grouping(self):
+        if (getattr(self, '_auto_grouping_context', None) or
+                getattr(self, 'hp_worker', None) is not None or getattr(self, 'lp_worker', None) is not None or
+                self._is_closing or self._scene_change_pending):
+            return False
+        pair = next((p for p in self.root_pairs if p.get('id') == self.active_root_id), None)
+        if not pair:
+            return False
+        hp, lp, _ = self.core.resolve_main_nodes(pair)
+        if not hp or not lp:
+            return False
+        token = uuid.uuid4().hex
+        self._auto_grouping_context = dict(
+            token=token, pair_id=pair['id'], pair_ref=pair, hp_uuid=pair.get('hp_uuid'),
+            lp_uuid=pair.get('lp_uuid'), hp_path=tuple(cmds.ls(hp, long=True) or []),
+            lp_path=tuple(cmds.ls(lp, long=True) or []), generation=self._scene_generation, phase='hp')
+        self._set_analysis_controls_enabled(False)
+        self.log(bg_l10n.text('Automatic Bake Groups: grouping high-poly meshes, then matching low-poly meshes.'), 'lightblue')
+        try:
+            result = self.run_hp_analysis(None, _workflow_token=token)
+            if not self._auto_grouping_pair(token):
+                self._finish_auto_grouping(token)
+            elif getattr(getattr(self, 'hp_worker', None), '_bg_workflow_token', None) != token:
+                if result is True and self._usable_hp_groups(pair):
+                    self._queue_auto_lp(token)
+                else:
+                    self.log(bg_l10n.text('No unlocked HP groups are available for low-poly matching.'), 'orange')
+                    self._cancel_hp_analysis()
+                    self._finish_auto_grouping(token)
+            return result
+        except Exception as exc:
+            if self._auto_grouping_pair(token):
+                self._capture_interrupted_prep('hp_analysis')
+                self._cancel_hp_analysis()
+            self._finish_auto_grouping(token)
+            self._worker_failure_message(bg_l10n.text('Automatic Bake Groups'), exc)
+            return False
+
+    def _queue_auto_lp(self, token):
+        context = getattr(self, '_auto_grouping_context', None)
+        if not self._auto_grouping_pair(token):
+            self._finish_auto_grouping(token)
+            return
+        if context['phase'] not in ('hp', 'hp_complete'):
+            return
+        context['phase'] = 'lp_queued'
+        QtCore.QTimer.singleShot(0, lambda t=token: self._start_auto_lp(t))
+
+    def _start_auto_lp(self, token):
+        context = getattr(self, '_auto_grouping_context', None)
+        pair = self._auto_grouping_pair(token)
+        if not pair:
+            self._finish_auto_grouping(token)
+            return
+        if context['phase'] != 'lp_queued':
+            return
+        # Wait for the actual HP thread terminal event, not just its result.
+        if self._analysis_worker_running():
+            self._finish_auto_grouping(token)
+            return
+        context['phase'] = 'lp'
+        self.log(bg_l10n.text('Automatic Bake Groups: matching low-poly meshes.'), 'lightblue')
+        try:
+            result = self.run_lp_matching(pair_id=pair['id'], _workflow_token=token)
+            if getattr(getattr(self, 'lp_worker', None), '_bg_workflow_token', None) != token:
+                self._cancel_lp_matching()
+                self._finish_auto_grouping(token)
+            return result
+        except Exception as exc:
+            if self._auto_grouping_pair(token):
+                self._capture_interrupted_prep('lp_matching')
+                self._cancel_lp_matching()
+            self._finish_auto_grouping(token)
+            self._worker_failure_message(bg_l10n.text('Automatic Bake Groups'), exc)
+            return False
+
     def _worker_matches_scene(self, worker):
         return (
             worker is not None
@@ -139,8 +259,12 @@ class HPAnalysisMixin:
         return False
 
     def _set_analysis_controls_enabled(self, enabled):
+        if (getattr(self, '_auto_grouping_context', None) or
+                getattr(self, 'hp_worker', None) is not None or getattr(self, 'lp_worker', None) is not None):
+            enabled = False
         for attr_name in (
                 'btn_run_hp', 'btn_run_lp', 'btn_check_before_analyze',
+                'btn_load_session',
                 'btn_combine_mesh', 'btn_separate_mesh', 'btn_find_zbrush'):
             widget = getattr(self, attr_name, None)
             if widget is None:
@@ -149,6 +273,8 @@ class HPAnalysisMixin:
                 widget.setEnabled(bool(enabled))
             except RuntimeError:
                 pass
+        if hasattr(self, 'toc_tree'):
+            self.toc_tree.setEnabled(bool(enabled))
 
     def _close_analysis_progress(self, attr_name):
         progress = getattr(self, attr_name, None)
@@ -191,6 +317,12 @@ class HPAnalysisMixin:
             pass
         if not self._analysis_worker_running():
             self._set_analysis_controls_enabled(True)
+        context = getattr(self, '_auto_grouping_context', None)
+        if context and getattr(worker, '_bg_workflow_token', None) == context['token']:
+            if attr_name == 'hp_worker' and context['phase'] == 'hp_complete':
+                self._queue_auto_lp(context['token'])
+            else:
+                self._finish_auto_grouping(context['token'])
 
     def _worker_failure_message(self, task_name, error):
         detail = str(error or "Unknown worker error").strip()
@@ -915,6 +1047,28 @@ class HPAnalysisMixin:
     def _reset_prep_undo_tracking(self, key):
         setattr(self, '_prep_undo_depth_' + key, 0)
         setattr(self, '_prep_undo_names_' + key, [])
+        setattr(self, '_prep_expected_names_' + key, [])
+
+    def _capture_interrupted_prep(self, key):
+        # A preparation function may raise after mutating but before returning
+        # to its normal tracking call. Only capture this run's unique top chunk.
+        try:
+            current = str(cmds.undoInfo(query=True, undoName=True) or '')
+        except Exception:
+            return
+        if (current in getattr(self, '_prep_expected_names_' + key, []) and
+                current not in getattr(self, '_prep_undo_names_' + key, [])):
+            self._mark_prep_undo_step(key, current)
+
+    def _revert_failed_apply(self, kind):
+        expected = getattr(self, '_' + kind + '_apply_undo_name', None)
+        if expected:
+            try:
+                if str(cmds.undoInfo(query=True, undoName=True) or '') == expected:
+                    cmds.undo()
+            except Exception as exc:
+                self.log('Could not revert {} apply: {}'.format(kind, exc), 'red')
+        setattr(self, '_' + kind + '_apply_started', False)
 
     def _mark_prep_undo_step(self, key, expected_name):
         names_attr = '_prep_undo_names_' + key
@@ -969,7 +1123,12 @@ class HPAnalysisMixin:
         if worker is not None and current_worker is not worker:
             return
         if getattr(self, '_hp_task_finalized', False):
+            context = getattr(self, '_auto_grouping_context', None)
+            if worker is None and context and context['phase'] in ('hp_complete', 'lp_queued'):
+                self._finish_auto_grouping()
             return
+        if getattr(self, '_auto_grouping_context', None):
+            self._finish_auto_grouping()
         worker = current_worker
         if worker is not None:
             try:
@@ -987,6 +1146,8 @@ class HPAnalysisMixin:
             return
         if getattr(self, '_lp_task_finalized', False):
             return
+        if getattr(self, '_auto_grouping_context', None):
+            self._finish_auto_grouping()
         worker = current_worker
         if worker is not None:
             try:
@@ -1007,6 +1168,8 @@ class HPAnalysisMixin:
         self._close_analysis_progress('progress_dlg')
         self._revert_prep_undo('hp_analysis', "HP subgroup/mesh structure reverted after the analysis failed.")
         self._worker_failure_message("HP Analysis", error)
+        if getattr(self, '_auto_grouping_context', None):
+            self._finish_auto_grouping()
 
     def _on_hp_worker_cancelled(self, worker):
         if not self._worker_matches_scene(worker):
@@ -1018,19 +1181,33 @@ class HPAnalysisMixin:
                 getattr(self, 'hp_worker', None) is not worker or
                 getattr(self, '_hp_task_finalized', False)):
             return
+        token = getattr(worker, '_bg_workflow_token', None)
+        if token:
+            current_pair = self._auto_grouping_pair(token)
+            if not current_pair or current_pair['id'] != getattr(worker, '_bg_pair_id', None):
+                self._hp_task_finalized = True
+                self._close_analysis_progress('progress_dlg')
+                self._reset_prep_undo_tracking('hp_analysis')
+                self._finish_auto_grouping(token)
+                return
+            pair = current_pair
         self._hp_task_finalized = True
         try:
-            self.on_hp_finished(groups, logs, hp_main, pair)
+            applied = self.on_hp_finished(groups, logs, hp_main, pair)
+            context = getattr(self, '_auto_grouping_context', None)
+            if context and getattr(worker, '_bg_workflow_token', None) == context['token']:
+                if applied is True and self._auto_grouping_pair(context['token']) and self._usable_hp_groups(pair):
+                    context['phase'] = 'hp_complete'
+                else:
+                    self._finish_auto_grouping(context['token'])
         except Exception as exc:
             self._close_analysis_progress('progress_dlg')
             if getattr(self, '_hp_apply_started', False):
-                try:
-                    cmds.undo()
-                except Exception:
-                    pass
-                self._hp_apply_started = False
+                self._revert_failed_apply('hp')
             self._revert_prep_undo('hp_analysis', "HP mesh structure reverted after applying groups failed.")
             self._worker_failure_message("Apply HP Groups", exc)
+            if getattr(self, '_auto_grouping_context', None):
+                self._finish_auto_grouping()
 
     def _on_lp_worker_failed(self, worker, error):
         if (not self._worker_matches_scene(worker) or
@@ -1041,6 +1218,8 @@ class HPAnalysisMixin:
         self._close_analysis_progress('progress_dlg_lp')
         self._revert_prep_undo('lp_matching', "LP mesh structure reverted after matching failed.")
         self._worker_failure_message("Assign LP Meshes", error)
+        if getattr(self, '_auto_grouping_context', None):
+            self._finish_auto_grouping()
 
     def _on_lp_worker_cancelled(self, worker):
         if not self._worker_matches_scene(worker):
@@ -1053,20 +1232,28 @@ class HPAnalysisMixin:
                 getattr(self, 'lp_worker', None) is not worker or
                 getattr(self, '_lp_task_finalized', False)):
             return
+        token = getattr(worker, '_bg_workflow_token', None)
+        if token:
+            current_pair = self._auto_grouping_pair(token)
+            if not current_pair or current_pair['id'] != getattr(worker, '_bg_pair_id', None):
+                self._lp_task_finalized = True
+                self._close_analysis_progress('progress_dlg_lp')
+                self._reset_prep_undo_tracking('lp_matching')
+                self._finish_auto_grouping(token)
+                return
         self._lp_task_finalized = True
         try:
             self.on_lp_finished(
                 matches, lp_main, hp_groups, hp_verts_cache,
-                lp_verts_cache_fast, lp_verts_cache_full
+                lp_verts_cache_fast, lp_verts_cache_full,
+                pair_id=getattr(worker, '_bg_pair_id', None)
             )
+            if getattr(self, '_auto_grouping_context', None):
+                self.log(bg_l10n.text('Automatic Bake Groups complete.'), 'lightgreen')
         except Exception as exc:
             self._close_analysis_progress('progress_dlg_lp')
             if getattr(self, '_lp_apply_started', False):
-                try:
-                    cmds.undo()
-                except Exception:
-                    pass
-                self._lp_apply_started = False
+                self._revert_failed_apply('lp')
             self._revert_prep_undo('lp_matching', "LP mesh structure reverted after applying matches failed.")
             self._worker_failure_message("Apply LP Matches", exc)
 
@@ -1121,11 +1308,15 @@ class HPAnalysisMixin:
         cmds.inViewMessage(amg="Check completed: no issues found.", pos='midCenter', fade=True)
         return True
 
-    def run_hp_analysis(self, _):
+    def run_hp_analysis(self, _, _workflow_token=None):
+        context = getattr(self, '_auto_grouping_context', None)
+        if context and context['token'] != _workflow_token:
+            return False
         if self._analysis_worker_running():
             self.log("Another analysis task is still running.", "orange")
             return
-        pair = next((p for p in self.root_pairs if p['id'] == self.active_root_id), None)
+        pair_id = context['pair_id'] if context else self.active_root_id
+        pair = next((p for p in self.root_pairs if p['id'] == pair_id), None)
         if not pair:
             return
         self.last_debug_lines = []
@@ -1135,7 +1326,7 @@ class HPAnalysisMixin:
             cmds.warning("HighPoly root not found.")
             return
 
-        if not self.validate_frozen_transforms([hp_main], [hp_main], bg_l10n.text("Analyze HP")):
+        if not self.validate_frozen_transforms([hp_main], [hp_main], bg_l10n.text("Automatic Bake Groups")):
             return
 
         # Duplicate/ZBrush/combined-mesh checks moved to the standalone "Check"
@@ -1147,7 +1338,7 @@ class HPAnalysisMixin:
             box.setWindowTitle(bg_l10n.text("Structure Not Checked"))
             box.setIcon(QtWidgets.QMessageBox.Question)
             box.setText(bg_l10n.text("Duplicate, ZBrush and combined-mesh checks have not been run for this chapter yet."))
-            box.setInformativeText(bg_l10n.text("Run the check now, or continue Analyze HP without checking?"))
+            box.setInformativeText(bg_l10n.text("Run the check now, or continue automatic grouping without checking?"))
             check_btn = box.addButton(bg_l10n.text("Check Now"), QtWidgets.QMessageBox.AcceptRole)
             continue_btn = box.addButton(bg_l10n.text("Continue"), QtWidgets.QMessageBox.ActionRole)
             box.addButton(QtWidgets.QMessageBox.Cancel)
@@ -1162,12 +1353,15 @@ class HPAnalysisMixin:
             elif clicked != continue_btn:
                 return
 
+        if context and not self._auto_grouping_pair(_workflow_token):
+            return False
         self._hp_task_finalized = False
         self._reset_prep_undo_tracking('hp_analysis')
         prep_run_id = uuid.uuid4().hex[:12]
         hp_structure_undo_name = "PrepareHPAnalysis_{}".format(prep_run_id)
         hp_cache_undo_name = "PrepareHPMeshCache_{}".format(prep_run_id)
         hp_lp_undo_name = "PrepareHPLowMeshes_{}".format(prep_run_id)
+        self._prep_expected_names_hp_analysis = [hp_structure_undo_name, hp_cache_undo_name, hp_lp_undo_name]
 
         worker_params = self.gather_hp_worker_params()
         threshold_pct = worker_params['threshold_pct']
@@ -1189,29 +1383,32 @@ class HPAnalysisMixin:
 
         # If keeping HP structure, just use existing subgroups
         if self.cb_keep_hp_structure.isChecked():
-            self.hp_data_cache.clear()
-            groups_found = False
-            for child in (cmds.listRelatives(hp_main, children=True, fullPath=True, type='transform') or []):
-                if not cmds.listRelatives(child, shapes=True):
-                    grp_name = child.split('|')[-1]
-                    match = re.search(r'(_HP|_LP)(\d*)$', grp_name)
-                    grp_label = grp_name[:match.start()] + match.group(2) if match else grp_name
-                    if grp_label in locked_subgroups or grp_name in locked_subgroups:
-                        groups_found = True
-                        continue
-                    if not grp_name.endswith(bg_core.BakeConfig.SUFFIX_HP):
-                        child = cmds.rename(child, "{}{}".format(grp_name, bg_core.BakeConfig.SUFFIX_HP))
-                    if not cmds.objExists(child + "." + bg_core.BakeConfig.ATTR_BAKE_GROUP):
-                        cmds.addAttr(child, ln=bg_core.BakeConfig.ATTR_BAKE_GROUP, dt="string")
-                        cmds.setAttr("{}.{}".format(child, bg_core.BakeConfig.ATTR_BAKE_GROUP), "HP", type="string")
+            with bg_core.undo_chunk(hp_structure_undo_name):
+                self.hp_data_cache.clear()
+                groups_found = False
+                for child in (cmds.listRelatives(hp_main, children=True, fullPath=True, type='transform') or []):
+                    if not cmds.listRelatives(child, shapes=True):
+                        grp_name = child.split('|')[-1]
+                        match = re.search(r'(_HP|_LP)(\d*)$', grp_name)
+                        grp_label = grp_name[:match.start()] + match.group(2) if match else grp_name
+                        if grp_label in locked_subgroups or grp_name in locked_subgroups:
+                            groups_found = True
+                            continue
+                        if not grp_name.endswith(bg_core.BakeConfig.SUFFIX_HP):
+                            child = cmds.rename(child, "{}{}".format(grp_name, bg_core.BakeConfig.SUFFIX_HP))
+                        if not cmds.objExists(child + "." + bg_core.BakeConfig.ATTR_BAKE_GROUP):
+                            cmds.addAttr(child, ln=bg_core.BakeConfig.ATTR_BAKE_GROUP, dt="string")
+                            cmds.setAttr("{}.{}".format(child, bg_core.BakeConfig.ATTR_BAKE_GROUP), "HP", type="string")
 
-                    sub_meshes = self.prepare_meshes(child, flatten=True)
-                    if sub_meshes:
-                        groups_found = True
-                        for m in sub_meshes:
-                            data = bg_core.MeshDataManager.get_mesh_data(m)
-                            if data:
-                                self.hp_data_cache[m] = data
+                        sub_meshes = self.prepare_meshes(child, flatten=True)
+                        if sub_meshes:
+                            groups_found = True
+                            for m in sub_meshes:
+                                data = bg_core.MeshDataManager.get_mesh_data(m)
+                                if data:
+                                    self.hp_data_cache[m] = data
+
+            self._mark_prep_undo_step('hp_analysis', hp_structure_undo_name)
 
             if not groups_found:
                 self.log("No existing HP subgroups found to keep.", "orange")
@@ -1220,8 +1417,13 @@ class HPAnalysisMixin:
                 if hasattr(self, 'refresh_subgroup_color_preview'):
                     self.refresh_subgroup_color_preview(reset_indices=True)
                 self.log("Kept existing HP subgroup structure.", "lightblue")
+            valid = bool(groups_found and self._usable_hp_groups(pair))
+            if valid:
+                self._reset_prep_undo_tracking('hp_analysis')
+            else:
+                self._revert_prep_undo('hp_analysis', 'No usable HP groups; kept-structure preparation reverted.')
             self._hp_task_finalized = True
-            return
+            return valid
 
         # Flatten and prepare
         with bg_core.undo_chunk(hp_structure_undo_name):
@@ -1248,7 +1450,9 @@ class HPAnalysisMixin:
 
         if not final_meshes:
             self._revert_prep_undo('hp_analysis', "HP mesh structure reverted because there was nothing to analyze.")
-            return self.log("No unlocked HP meshes found to analyze.", "red")
+            self._hp_task_finalized = True
+            self.log("No unlocked HP meshes found to analyze; existing protected groups are unchanged.", "lightblue")
+            return self._usable_hp_groups(pair)
 
         self.hp_data_cache.clear()
 
@@ -2068,6 +2272,11 @@ class HPAnalysisMixin:
 
         self.progress_dlg.setLabelText(bg_l10n.text("Starting Multithreaded Processing..."))
 
+        if _workflow_token and not self._auto_grouping_pair(_workflow_token):
+            self._hp_task_finalized = True
+            self._close_analysis_progress('progress_dlg')
+            self._finish_auto_grouping(_workflow_token)
+            return False
         worker = HPGroupingWorker(
             self.hp_data_cache, self.lp_data_cache,
             hp_verts_cache, lp_verts_cache, hp_holes_cache,
@@ -2088,6 +2297,8 @@ class HPAnalysisMixin:
             lp_surface_cache=lp_surface_cache
         )
         worker._bg_scene_generation = getattr(self, '_scene_generation', 0)
+        worker._bg_workflow_token = _workflow_token
+        worker._bg_pair_id = pair['id']
         self.hp_worker = worker
         progress = self.progress_dlg
         worker.progress_value.connect(progress.setValue)
@@ -2105,11 +2316,13 @@ class HPAnalysisMixin:
         except Exception as exc:
             self._on_hp_worker_failed(worker, exc)
             self._on_analysis_thread_finished('hp_worker', worker)
+            return False
+        return True
 
     def on_hp_finished(self, groups, logs, hp_main, pair):
         worker = getattr(self, 'hp_worker', None)
         if worker is not None and getattr(worker, 'is_cancelled', False):
-            return
+            return False
         self._close_analysis_progress('progress_dlg')
         summary_lines = list(getattr(worker, 'summary_lines', []) or [])
         explain_lines = list(getattr(worker, 'debug_lines', []) or [])
@@ -2142,7 +2355,8 @@ class HPAnalysisMixin:
         # for the same constraints here would duplicate final groups.
 
         self._hp_apply_started = True
-        with bg_core.undo_chunk("ApplyHPGroups"):
+        self._hp_apply_undo_name = 'ApplyHPGroups_' + uuid.uuid4().hex[:12]
+        with bg_core.undo_chunk(self._hp_apply_undo_name):
             for child in (cmds.listRelatives(hp_main, children=True, fullPath=True, type='transform') or []):
                 match = re.search(r'(_HP|_LP)(\d*)$', child.split('|')[-1])
                 grp_ui_name = child.split('|')[-1][:match.start()] + match.group(2) if match else child.split('|')[-1]
@@ -2185,6 +2399,7 @@ class HPAnalysisMixin:
                 "Analyze HP finished",
                 "groups={} | mode={}".format(len(groups), getattr(worker, 'grouping_mode', 'unknown'))
             )
+        return True
 
 
 # ============================================================================
@@ -2336,11 +2551,15 @@ class LPMatchingMixin:
 
         return repaired, move_count
 
-    def run_lp_matching(self):
+    def run_lp_matching(self, pair_id=None, _workflow_token=None):
+        context = getattr(self, '_auto_grouping_context', None)
+        if context and context['token'] != _workflow_token:
+            return False
         if self._analysis_worker_running():
             self.log("Another analysis task is still running.", "orange")
             return
-        pair = next((p for p in self.root_pairs if p['id'] == self.active_root_id), None)
+        target_id = pair_id if pair_id is not None else self.active_root_id
+        pair = next((p for p in self.root_pairs if p['id'] == target_id), None)
         if not pair:
             return self.log("No active pair selected.", "orange")
         hp_main, lp_main, _ = self.core.resolve_main_nodes(pair)
@@ -2353,6 +2572,7 @@ class LPMatchingMixin:
         self._lp_task_finalized = False
         self._reset_prep_undo_tracking('lp_matching')
         lp_prep_undo_name = "PrepareLPMatching_{}".format(uuid.uuid4().hex[:12])
+        self._prep_expected_names_lp_matching = [lp_prep_undo_name]
         final_lp_meshes = self.prepare_meshes(
             lp_main, flatten=True, undo_name=lp_prep_undo_name,
             protected_groups=pair.get('locked', [])
@@ -2387,7 +2607,7 @@ class LPMatchingMixin:
 
         if not hp_groups:
             self._revert_prep_undo('lp_matching', "LP mesh structure reverted because no HP subgroups were available.")
-            return self.log("No HP subgroups found! Run HP Analysis first.", "orange")
+            return self.log(bg_l10n.text("No HP subgroups found. Run Automatic Bake Groups first."), "orange")
 
         self.hp_data_cache.clear()
         all_hp_paths = []
@@ -2678,6 +2898,11 @@ class LPMatchingMixin:
         self.progress_dlg_lp.setValue(0)
 
         # Воркер запускается уже с обогащенным кэшем lp_verts_cache_full
+        if _workflow_token and not self._auto_grouping_pair(_workflow_token):
+            self._lp_task_finalized = True
+            self._close_analysis_progress('progress_dlg_lp')
+            self._finish_auto_grouping(_workflow_token)
+            return False
         worker = LPMatchingWorker(
             hp_groups=hp_groups,
             hp_data_cache=self.hp_data_cache,
@@ -2688,6 +2913,8 @@ class LPMatchingMixin:
             lp_threshold_coef=1.5
         )
         worker._bg_scene_generation = getattr(self, '_scene_generation', 0)
+        worker._bg_workflow_token = _workflow_token
+        worker._bg_pair_id = pair['id']
         self.lp_worker = worker
         progress = self.progress_dlg_lp
         worker.progress_value.connect(progress.setValue)
@@ -2707,12 +2934,15 @@ class LPMatchingMixin:
         except Exception as exc:
             self._on_lp_worker_failed(worker, exc)
             self._on_analysis_thread_finished('lp_worker', worker)
+            return False
+        return True
 
-    def on_lp_finished(self, matches, lp_main, hp_groups=None, hp_verts_cache=None, lp_verts_cache_fast=None, lp_verts_cache_full=None):
+    def on_lp_finished(self, matches, lp_main, hp_groups=None, hp_verts_cache=None, lp_verts_cache_fast=None, lp_verts_cache_full=None, pair_id=None):
         # ... (Код завершения остается абсолютно без изменений) ...
         self._close_analysis_progress('progress_dlg_lp')
         total_matched = 0
-        pair = next((p for p in self.root_pairs if p['id'] == self.active_root_id), None)
+        target_id = pair_id if pair_id is not None else self.active_root_id
+        pair = next((p for p in self.root_pairs if p['id'] == target_id), None)
         locked_subgroups = pair.get('locked', []) if pair else []
         # Recheck at commit time as well as during collection: asynchronous
         # results must not add an unlocked LP to a protected target group.
@@ -2729,7 +2959,8 @@ class LPMatchingMixin:
         )
 
         self._lp_apply_started = True
-        with bg_core.undo_chunk("ApplyLPMatching"):
+        self._lp_apply_undo_name = 'ApplyLPMatching_' + uuid.uuid4().hex[:12]
+        with bg_core.undo_chunk(self._lp_apply_undo_name):
             for child in (cmds.listRelatives(lp_main, children=True, fullPath=True, type='transform') or []):
                 match_re = re.search(r'(_HP|_LP)(\d*)$', child.split('|')[-1])
                 grp_ui_name = child.split('|')[-1][:match_re.start()] + match_re.group(2) if match_re else child.split('|')[-1]
@@ -4014,7 +4245,7 @@ class ExportMixin:
             return
 
         if result.get('lp', 0) == 0:
-            cmds.warning("Combine Fin: no LP subgroups were combined. Run Assign LP Meshes first or check LP subgroup names.")
+            cmds.warning(bg_l10n.text("Combine Fin: no LP subgroups were combined. Run Automatic Bake Groups first or check LP subgroup names."))
         else:
             self._sync_final_low_visibility_ui(base_name)
         if hasattr(self, 'record_user_action'):
@@ -4074,7 +4305,7 @@ class ExportMixin:
         details = [
             bg_l10n.text("Missing in LP: {names}").format(names=_format_names(missing_in_lp)),
             bg_l10n.text("Extra in LP: {names}").format(names=_format_names(extra_in_lp)),
-            bg_l10n.text("Fix LP subgroups with Assign LP Meshes or rename/create matching LP subgroups before Combine Fin.")
+            bg_l10n.text("Run Automatic Bake Groups or rename/create matching LP subgroups before Combine Fin.")
         ]
         full_message = "{}\n\n{}".format(message, "\n".join(details))
         self.log(full_message.replace("\n", " | "), "orange")

@@ -275,6 +275,57 @@ class ExportCageMayaTests(unittest.TestCase):
         self.assertEqual([node.rsplit('|', 1)[-1] for node in snapshot['lp_all']],
                          ['asset_wheel_HP_detail2_low'])
 
+    def test_generated_final_chapter_is_hidden_and_other_chapter_stays_visible(self):
+        source_nodes = [self.hp, self.lp] + self.highs + [self.low]
+        source_nodes += cmds.listRelatives(self.hp, allDescendents=True, type='mesh', fullPath=True) or []
+        source_nodes += cmds.listRelatives(self.lp, allDescendents=True, type='mesh', fullPath=True) or []
+        cmds.setAttr(self.highs[0] + '.visibility', False)
+        cmds.setAttr(self.lp + '.visibility', False)
+        before = {cmds.ls(node, uuid=True)[0]: cmds.getAttr(node + '.visibility') for node in source_nodes}
+        root = cmds.group(empty=True, name='LP_Combine_BG')
+        other = cmds.group(empty=True, name='OtherChapter', parent=root)
+        other_mesh = cmds.polyCube(name='OtherChapter_part_low')[0]
+        other_mesh = cmds.parent(other_mesh, other)[0]
+        other_id = cmds.ls(other_mesh, uuid=True)[0]
+        for repeat in range(2):
+            if repeat:
+                cmds.setAttr('|LP_Combine_BG|asset.visibility', True)
+            result = self.exporter.combine_all_subgroups('asset', self.hp, self.lp)
+            self.assertTrue(result['success'])
+            self.assertEqual(result['lp'], 1)
+            self.assertFalse(cmds.getAttr('|LP_Combine_BG|asset.visibility'))
+            self.assertTrue(cmds.getAttr('|LP_Combine_BG.visibility'))
+            self.assertTrue(cmds.getAttr('|LP_Combine_BG|OtherChapter.visibility'))
+            self.assertEqual(len(cmds.ls(other_id)), 1)
+            for identifier, visible in before.items():
+                node = cmds.ls(identifier, long=True)[0]
+                self.assertEqual(cmds.getAttr(node + '.visibility'), visible, node)
+
+    def test_first_generation_hidden_container_can_be_explicitly_shown(self):
+        self.assertFalse(cmds.objExists('|LP_Combine_BG'))
+        result = self.exporter.combine_all_subgroups('asset', self.hp, self.lp)
+        self.assertTrue(result['success'])
+        chapter = '|LP_Combine_BG|asset'
+        self.assertFalse(cmds.getAttr(chapter + '.visibility'))
+        finals = self.exporter.get_valid_mesh_transforms(chapter)
+        self.assertEqual(len(finals), 1)
+        self.assertTrue(cmds.getAttr(finals[0] + '.visibility'))
+        cmds.setAttr(chapter + '.visibility', True)
+        self.assertIn(finals[0], cmds.ls(finals[0], visible=True, long=True))
+
+    def test_export_existing_final_never_resets_manual_display(self):
+        self.assertTrue(self.exporter.combine_all_subgroups('asset', self.hp, self.lp)['success'])
+        chapter = '|LP_Combine_BG|asset'
+        final = self.exporter.get_valid_mesh_transforms(chapter)[0]
+        nodes = [self.hp, self.lp, self.low, '|LP_Combine_BG', chapter, final]
+        nodes += cmds.listRelatives(final, shapes=True, fullPath=True) or []
+        for visible in (True, False):
+            cmds.setAttr(chapter + '.visibility', visible)
+            before = {node: cmds.getAttr(node + '.visibility') for node in nodes}
+            self.assertEqual(self.exporter.export_chapter(
+                'asset', self.hp, self.lp, [], mode='lp', export_dir=self.directory), 'asset_LP')
+            self.assertEqual({node: cmds.getAttr(node + '.visibility') for node in nodes}, before)
+
     def test_internal_high_low_words_never_change_export_roles(self):
         cmds.delete(self.highs + [self.low])
         sources = []

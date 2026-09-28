@@ -58,11 +58,18 @@ import maya.cmds as cmds
 cmds.optionVar(intValue=('BakeMasterAutoUpdate', 0))
 
 REPO = Path(__file__).resolve().parents[1]
-RUNTIME = REPO / 'src' / 'Bake_Groups'
+_installed_runtime = os.environ.get('BG_TEST_RUNTIME')
+RUNTIME = Path(_installed_runtime).resolve() if _installed_runtime else REPO / 'src' / 'Bake_Groups'
 sys.path.insert(0, str(RUNTIME))
 _year = str(cmds.about(version=True))[:4]
-for _candidate in (RUNTIME / 'bin' / _year, REPO / 'build' / 'native' / _year):
+_native_candidates = [RUNTIME / 'bin' / _year]
+if not _installed_runtime:
+    _native_candidates.append(REPO / 'build' / 'native' / _year)
+for _candidate in _native_candidates:
     if (_candidate / 'bg_math_core.pyd').is_file():
         sys.path.insert(0, str(_candidate))
         break
+else:
+    if _installed_runtime:
+        raise RuntimeError('BG_TEST_RUNTIME must contain the native binary for Maya ' + _year)
 from bg_version import VERSION

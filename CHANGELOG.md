@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2 — 2026-09-29
+
+- Restored automatic hiding of newly generated final models while preserving source-model visibility and the state present before export.
+- Combined HP analysis and LP assignment into one Automatic Bake Groups workflow, with LP matching following successful HP grouping for the same chapter.
+- Kept public in-plugin updates: 1.0.1 installations can update directly to 1.0.2. Version 1.0.0 still requires one manual installation of 1.0.1 or a later complete package.
+
 ## 1.0.1 — 2026-09-29
 
 - Added public GitHub Release updates without accounts, activation, tokens, signatures or encrypted payloads.

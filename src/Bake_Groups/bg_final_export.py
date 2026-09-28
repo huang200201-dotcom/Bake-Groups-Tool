@@ -677,7 +677,7 @@ class FinalExportProcessor(object):
 
     @staticmethod
     def combine_all_subgroups(base_name, hp_main, lp_main, parent_window=None):
-        """Final combine and rename logic."""
+        """Build final LP geometry hidden in its chapter, preserving source display."""
         from bg_final_groups import subgroup_name
 
         if not hp_main or not lp_main:
@@ -688,8 +688,8 @@ class FinalExportProcessor(object):
         progress_dlg.setWindowModality(QtCore.Qt.WindowModal)
         progress_dlg.show()
 
-        # Combine replaces the final meshes. Carry forward display choices
-        # by their exact output names while preserving the existing parents.
+        # Preserve individual mesh display choices across replacement. The
+        # generated chapter itself is hidden below on every generation pass.
         output_visibility = {}
         chapter_before = '|LP_Combine_BG|' + base_name
         if cmds.objExists(chapter_before):
@@ -838,6 +838,13 @@ class FinalExportProcessor(object):
                 chapter_lp_root = (
                     cmds.ls(chapter_lp_root, long=True) or [chapter_lp_root]
                 )[0]
+
+                # Generation leaves its own result hidden until the user shows
+                # it. Never hide the shared root, another chapter, or source LP.
+                # Do this before replacing meshes so partial results stay hidden
+                # too; a locked/driven visible chapter fails before replacement.
+                if cmds.getAttr(chapter_lp_root + '.visibility'):
+                    cmds.setAttr(chapter_lp_root + '.visibility', False)
 
                 _cleanup_old_chapter_lp_outputs(chapter_lp_root, base_name)
 

@@ -90,7 +90,7 @@ class VisibilityRegression(unittest.TestCase):
                                    type='transform', fullPath=True) or []
         return {node: self.plug_state(node) for node in nodes + ['|LP_Combine_BG']}
 
-    def test_combine_keeps_source_layers_and_existing_chapter_display(self):
+    def test_combine_hides_generated_chapter_but_keeps_sources_and_other_chapters(self):
         self.chapters()
         parent = cmds.group(empty=True, name='UserHiddenAncestor')
         self.hp = cmds.parent(self.hp, parent, absolute=True)[0]
@@ -105,10 +105,13 @@ class VisibilityRegression(unittest.TestCase):
         finals = self.low_states()
         self.ui.combine_all_subgroups_ui()
         self.assert_uuid_states(sources)
+        finals['|LP_Combine_BG|Asset']['visibility'] = (False, False, ())
         self.assertEqual(self.low_states(), finals)
         self.assertFalse(self.effective_visibility(self.hp))
+        self.assertFalse(self.effective_visibility('|LP_Combine_BG|Asset|Asset_Visible_low'))
+        self.assertTrue(self.effective_visibility('|LP_Combine_BG|Other|Other_OtherVisible_low'))
 
-    def test_repeated_combine_preserves_each_final_mesh_visibility(self):
+    def test_repeated_combine_hides_result_each_time_and_keeps_individual_mesh_choices(self):
         self.chapters()
         cmds.setAttr('|LP_Combine_BG|Asset.visibility', 0)
         shape = cmds.listRelatives('|LP_Combine_BG|Asset|Asset_Visible_low',
@@ -116,6 +119,7 @@ class VisibilityRegression(unittest.TestCase):
         cmds.setAttr(shape + '.visibility', 0)
         states = self.low_states()
         for _repeat in range(2):
+            cmds.setAttr('|LP_Combine_BG|Asset.visibility', 1)
             self.ui.combine_all_subgroups_ui()
             self.assertEqual(self.low_states(), states)
             current_shape = cmds.listRelatives('|LP_Combine_BG|Asset|Asset_Visible_low',

@@ -43,7 +43,11 @@ $env:BG_NATIVE_TEST_BIN = (Resolve-Path build/native/2027).Path
 
 Run Maya integration tests in a new standalone process, never in a production scene. Set `MAYA_LOCATION` and prepend its `bin` directory to `PATH` if required by that installation. `tests/test_export_cage_maya.py` covers export round trips; `tests/test_open_ui_maya.py` covers the open-source UI. These tests create disposable scenes.
 
+`tests/test_auto_grouping_maya.py` exercises the single-button HP-to-LP workflow with actual Maya workers. Set `BG_TEST_RUNTIME` to a disposable installed `Bake_Groups` folder to run it, and the shared scene regressions, against the exact release payload instead of the source checkout. In this mode the helper uses only the installed native binary.
+
 For the installed update lifecycle, set `BG_UPDATE_TEST_PACKAGE` to an extracted complete release package and run `tests/test_update_hot_reload_maya.py` with Maya 2027's `mayapy`. It installs into a temporary directory, stages a local future-version fixture, and hot reloads the actual Python runtime while retaining the loaded C++ module. It verifies asset tasks, selection and visibility. Network responses and standalone dock placement are replaced for this test; production scripts folders are never used.
+
+Optionally set `BG_UPDATE_TEST_BASE_PACKAGE` to an extracted previous release to test the actual old-to-new upgrade instead of a future-version fixture.
 
 CI runs unit tests and sample native ABI builds. Before release, local validation must cover all six native outputs and at least one full Maya integration run; a matching CPython test is not a claim that every Maya GUI was tested.
 
@@ -62,7 +66,7 @@ The launcher finds `build/native/<year>` from a source checkout. Installed packa
 
 1. Update `bg_version.py` and `CHANGELOG.md`.
 2. Build and test all native outputs and the maintained regressions.
-3. Run `python tools/build-release.py --version 1.0.1` (substitute the release version). The builder requires all six binaries and the public updater, and includes corresponding native source, build instructions, notices and checksums. Licensing and credential modules are rejected.
+3. Run `python tools/build-release.py --version 1.0.2` (substitute the release version). The builder requires all six binaries and the public updater, and includes corresponding native source, build instructions, notices and checksums. Licensing and credential modules are rejected.
 4. Install that exact ZIP into a disposable scripts directory and run its packaged runtime in a fresh Maya process.
 5. Commit source only, create `v<version>` at the tested commit, and push it.
 6. Create a GitHub Release for that tag and upload `Bake_Master_<version>_Windows_x64.zip` plus its external checksum. Each release contains only the assets for its own version.
@@ -75,6 +79,6 @@ The archive's `SHA256.txt` describes its complete file list. The updater validat
 
 The launcher coordinates application on the Maya main thread after plugin work becomes idle. Unchanged native binaries remain in place during Python updates. A change to a native module already loaded in Maya requires a restart before application. Validate both paths using a disposable installation; do not simulate a new binary by loading a module for the wrong ABI. Source checkouts under `src/Bake_Groups` are excluded from automatic replacement.
 
-Version 1.0.0 has no updater. Users must manually install 1.0.1 once before using the in-plugin update workflow.
+Version 1.0.0 has no updater. Users must manually install 1.0.1 or a later complete package once before using the in-plugin update workflow. Existing 1.0.1 installations can update directly to 1.0.2.
 
 Do not commit binaries, SDKs, ZIPs, local credentials or machine-specific paths. Keep subsequent open-source version history; the initial historical cleanup is not a recurring release practice.
