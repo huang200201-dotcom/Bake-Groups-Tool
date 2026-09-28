@@ -32,7 +32,7 @@ class OpenReleaseTests(unittest.TestCase):
         source = self.repo / 'src/Bake_Groups'
         source.mkdir(parents=True)
         for name in builder.REQUIRED_SOURCE:
-            (source / name).write_text('__version__ = "1.0.0"\n' if name == 'bg_version.py' else '# fixture source\n', encoding='utf-8')
+            (source / name).write_text('__version__ = "1.0.1"\n' if name == 'bg_version.py' else '# fixture source\n', encoding='utf-8')
         for name in ('LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md'):
             (self.repo / name).write_text('Release document fixture\n', encoding='utf-8')
         (self.repo / 'docs').mkdir()
@@ -40,7 +40,7 @@ class OpenReleaseTests(unittest.TestCase):
             (self.repo / 'docs' / name).write_text('Usage and build fixture\n', encoding='utf-8')
         (self.repo / 'installer').mkdir()
         shutil.copy2(ROOT / 'installer/安装到Maya.py', self.repo / 'installer/安装到Maya.py')
-        (self.repo / 'installer/安装说明.txt').write_text('Bake Master 1.0.0\n', encoding='utf-8')
+        (self.repo / 'installer/安装说明.txt').write_text('Bake Master 1.0.1\n', encoding='utf-8')
         (self.repo / 'native').mkdir()
         (self.repo / 'native/bg_math_core.cpp').write_text('// open native fixture\n', encoding='utf-8')
         (self.repo / 'tools').mkdir()
@@ -53,13 +53,13 @@ class OpenReleaseTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def build(self, version='1.0.0'):
+    def build(self, version='1.0.1'):
         return builder.build_release(self.repo, version)
 
     def test_complete_zip_has_six_open_binaries_source_license_and_valid_manifest(self):
         result = self.build()
         archive = Path(result['archive'])
-        self.assertEqual(archive.name, 'Bake_Master_1.0.0_Windows_x64.zip')
+        self.assertEqual(archive.name, 'Bake_Master_1.0.1_Windows_x64.zip')
         self.assertEqual(result['sha256'], hashlib.sha256(archive.read_bytes()).hexdigest())
         with zipfile.ZipFile(archive) as package:
             self.assertIsNone(package.testzip())
@@ -67,10 +67,10 @@ class OpenReleaseTests(unittest.TestCase):
             self.assertEqual(len(names), len(set(names)))
             self.assertEqual(len([name for name in names if name.endswith('.pyd')]), 6)
             for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'CHANGELOG.md',
-                         'docs/usage.md', 'docs/building.md', 'SHA256.txt',
+                         'docs/usage.md', 'docs/building.md', 'SHA256.txt', 'Bake_Groups/bg_update.py',
                          '安装到Maya.py', 'source/native/bg_math_core.cpp', 'source/tools/build-native.ps1'):
                 self.assertIn(name, names)
-            self.assertIn(b'/tree/v1.0.0', package.read('SOURCE_CODE.md'))
+            self.assertIn(b'/tree/v1.0.1', package.read('SOURCE_CODE.md'))
             self.assertFalse(any('/versions/' in name for name in names))
             extracted = self.repo.parent / 'extracted'
             package.extractall(extracted)
@@ -83,7 +83,14 @@ class OpenReleaseTests(unittest.TestCase):
         (legacy / 'old.py').write_bytes(b'old')
         installer.install_package(str(extracted), str(scripts), loaded_modules={})
         self.assertTrue((scripts / 'Bake_Groups/launcher.py').is_file())
+        self.assertTrue((scripts / 'Bake_Groups/bg_update.py').is_file())
         self.assertFalse((scripts / 'Bake_Groups/versions').exists())
+
+    def test_missing_public_updater_stops_before_publishing(self):
+        (self.repo / 'src/Bake_Groups/bg_update.py').unlink()
+        with self.assertRaisesRegex(ValueError, 'Missing source files: bg_update.py'):
+            self.build()
+        self.assertFalse((self.repo / 'dist').exists())
 
     def test_missing_one_native_stops_before_publishing(self):
         (self.repo / 'build/native/2024/bg_math_core.pyd').unlink()
@@ -106,13 +113,17 @@ class OpenReleaseTests(unittest.TestCase):
 
     def test_version_mismatch_does_not_create_archive(self):
         with self.assertRaisesRegex(ValueError, 'must match'):
-            self.build('1.0.1')
+            self.build('1.0.2')
         self.assertFalse((self.repo / 'dist').exists())
 
     def test_legacy_authorization_python_must_not_ship(self):
-        (self.repo / 'src/Bake_Groups/bg_license.py').write_bytes(b'old fixture')
-        with self.assertRaisesRegex(ValueError, 'legacy/build/private'):
-            self.build()
+        for name in ('bg_license.py', 'bg_credentials.py'):
+            with self.subTest(name=name):
+                path = self.repo / 'src/Bake_Groups' / name
+                path.write_bytes(b'old fixture')
+                with self.assertRaisesRegex(ValueError, 'legacy/build/private'):
+                    self.build()
+                path.unlink()
 
     def test_missing_source_or_notice_is_rejected(self):
         (self.repo / 'THIRD_PARTY_NOTICES.md').unlink()
@@ -122,7 +133,7 @@ class OpenReleaseTests(unittest.TestCase):
     def test_failed_zip_write_keeps_preexisting_release(self):
         output = self.repo / 'dist'
         output.mkdir()
-        archive = output / 'Bake_Master_1.0.0_Windows_x64.zip'
+        archive = output / 'Bake_Master_1.0.1_Windows_x64.zip'
         archive.write_bytes(b'previous release')
         with mock.patch.object(builder.zipfile.ZipFile, 'write', side_effect=OSError('disk full')):
             with self.assertRaisesRegex(OSError, 'disk full'):

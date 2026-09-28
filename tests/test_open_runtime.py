@@ -23,6 +23,7 @@ class OpenRuntimeTests(unittest.TestCase):
         self.cmds = types.ModuleType('maya.cmds')
         self.cmds.about = mock.Mock(return_value='2027')
         self.cmds.workspaceControl = mock.Mock(return_value=False)
+        self.cmds.warning = mock.Mock()
         maya = types.ModuleType('maya')
         maya.cmds = self.cmds
         self.app = mock.Mock()
@@ -150,9 +151,106 @@ class OpenRuntimeTests(unittest.TestCase):
         self.assertFalse(self.launcher._restore_existing_ui(str(self.runtime)))
         ui.show.assert_not_called()
 
-    def test_source_tree_has_no_licensing_or_network_imports(self):
+    def test_staged_update_is_applied_before_native_import(self):
+        self.make_binary()
+        events = []
+        with mock.patch.object(self.launcher, '_apply_ready_update',
+                               side_effect=lambda path: events.append('apply') or True):
+            with mock.patch.object(self.launcher, '_launch_updated_runtime',
+                                   side_effect=lambda path: events.append('updated_launcher') or 'new_ui'):
+                with mock.patch.object(self.launcher, '_prepare_runtime') as prepare:
+                    self.assertEqual(self.launcher.main(), 'new_ui')
+        self.assertEqual(events, ['apply', 'updated_launcher'])
+        prepare.assert_not_called()
+
+    def _fake_updater(self, restart=False):
+        update_dir = self.runtime.parent / 'Bake_Groups.update'
+        update_dir.mkdir()
+        (update_dir / 'pending.json').write_text('{}')
+        (self.runtime / 'bg_update.py').write_text('')
+        updater = types.ModuleType('_fake_updater')
+        updater.pending_update = mock.Mock(return_value={'version': '1.0.2'})
+        updater.requires_restart = mock.Mock(return_value=restart)
+        updater.apply_pending = mock.Mock(return_value={'status': 'applied', 'version': '1.0.2'})
+        loader = mock.Mock()
+        spec = types.SimpleNamespace(loader=loader)
+        patches = [mock.patch.object(self.launcher.importlib.util, 'spec_from_file_location', return_value=spec),
+                   mock.patch.object(self.launcher.importlib.util, 'module_from_spec', return_value=updater)]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        return updater
+
+    def test_loaded_native_change_waits_without_closing_ui(self):
+        updater = self._fake_updater(restart=True)
+        with mock.patch.object(self.launcher, '_shutdown_existing_bake_groups_ui') as shutdown:
+            self.assertFalse(self.launcher._apply_ready_update(str(self.runtime)))
+        shutdown.assert_not_called()
+        updater.apply_pending.assert_not_called()
+        self.cmds.warning.assert_called_once()
+
+    def test_worker_shutdown_must_succeed_before_applying_update(self):
+        updater = self._fake_updater()
+        with mock.patch.object(self.launcher, '_shutdown_existing_bake_groups_ui',
+                               side_effect=RuntimeError('worker still stopping')):
+            self.assertFalse(self.launcher._apply_ready_update(str(self.runtime)))
+        updater.apply_pending.assert_not_called()
+        self.cmds.warning.assert_called_once()
+
+    def test_python_update_closes_old_ui_before_file_replacement(self):
+        updater = self._fake_updater()
+        events = []
+        updater.apply_pending.side_effect = lambda path: events.append('apply') or {'status': 'applied'}
+        with mock.patch.object(self.launcher, '_shutdown_existing_bake_groups_ui',
+                               side_effect=lambda: events.append('shutdown')):
+            self.assertTrue(self.launcher._apply_ready_update(str(self.runtime)))
+        self.assertEqual(events, ['shutdown', 'apply'])
+
+    def test_apply_failure_reports_error_and_allows_normal_startup(self):
+        updater = self._fake_updater()
+        updater.apply_pending.side_effect = RuntimeError('disk full, transaction restored')
+        with mock.patch.object(self.launcher, '_shutdown_existing_bake_groups_ui'):
+            self.assertFalse(self.launcher._apply_ready_update(str(self.runtime)))
+        self.assertIn('disk full', self.cmds.warning.call_args[0][0])
+
+    def test_new_launcher_code_runs_without_applying_same_update_twice(self):
+        (self.runtime / 'launcher.py').write_text(
+            'def main(_skip_update=False):\n    return ("new launcher", _skip_update)\n')
+        self.assertEqual(self.launcher._launch_updated_runtime(str(self.runtime)),
+                         ('new launcher', True))
+
+    def test_unfinished_rollback_blocks_import_of_mixed_runtime(self):
+        updater = self._fake_updater()
+        journal = self.runtime.parent / 'Bake_Groups.update' / 'transaction.json'
+        journal.write_text('{"state":"applying"}')
+        updater.apply_pending.side_effect = RuntimeError('recovery remains pending')
+        with mock.patch.object(self.launcher, '_shutdown_existing_bake_groups_ui'):
+            with mock.patch.object(self.launcher, '_prepare_runtime') as prepare:
+                with self.assertRaisesRegex(RuntimeError, 'recovery is incomplete'):
+                    self.launcher.main()
+        prepare.assert_not_called()
+
+    def test_native_recovery_requiring_restart_keeps_existing_ui(self):
+        updater = self._fake_updater(restart=True)
+        journal = self.runtime.parent / 'Bake_Groups.update' / 'transaction.json'
+        journal.write_text('{"state":"applying"}')
+        with mock.patch.object(self.launcher, '_shutdown_existing_bake_groups_ui') as shutdown:
+            with self.assertRaisesRegex(RuntimeError, 'recovery is incomplete'):
+                self.launcher.main()
+        shutdown.assert_not_called()
+        updater.apply_pending.assert_not_called()
+
+    def test_completed_transaction_cleanup_failure_does_not_block_startup(self):
+        updater = self._fake_updater()
+        journal = self.runtime.parent / 'Bake_Groups.update' / 'transaction.json'
+        journal.write_text('{"state":"committed"}')
+        updater.apply_pending.side_effect = RuntimeError('old backup cleanup failed')
+        with mock.patch.object(self.launcher, '_shutdown_existing_bake_groups_ui'):
+            self.assertFalse(self.launcher._apply_ready_update(str(self.runtime)))
+
+    def test_source_tree_keeps_network_confined_to_public_updater(self):
         forbidden = {
-            'bg_license', 'bg_credentials', 'bg_update',
+            'bg_license', 'bg_credentials',
             'urllib', 'http', 'requests', 'socket', 'websocket',
         }
         for path in sorted(RUNTIME.rglob('*.py')):
@@ -164,6 +262,8 @@ class OpenRuntimeTests(unittest.TestCase):
                 elif isinstance(node, ast.ImportFrom) and node.module:
                     imported = [node.module]
                 for name in imported:
+                    if path.name == 'bg_update.py' and name.split('.')[0] in ('urllib', 'http', 'socket'):
+                        continue
                     self.assertNotIn(name.split('.')[0], forbidden,
                                      '{} imports {}'.format(path.name, name))
 

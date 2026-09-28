@@ -28,7 +28,7 @@ def make_package(package):
     payload = package / 'Bake_Groups'
     payload.mkdir(parents=True)
     for name in installer.REQUIRED_FILES:
-        (payload / name).write_text('__version__ = "1.0.0"\n' if name == 'bg_version.py' else '# open fixture\n', encoding='utf-8')
+        (payload / name).write_text('__version__ = "1.0.1"\n' if name == 'bg_version.py' else '# open fixture\n', encoding='utf-8')
     for year in installer.SUPPORTED_MAYA:
         native = payload / 'bin' / year / 'bg_math_core.pyd'
         native.parent.mkdir(parents=True)
@@ -61,7 +61,7 @@ class OpenInstallerTests(unittest.TestCase):
         return installer.install_package(str(self.package), str(self.scripts), loaded_modules={} if modules is None else modules)
 
     def assert_no_transaction_files(self):
-        self.assertFalse(list(self.scripts.glob('Bake_Groups.install*')))
+        self.assertFalse(list(self.scripts.glob('Bake_Groups.install-*')))
         self.assertFalse(list(self.scripts.glob('Bake_Groups.backup-*')))
 
     def test_fresh_install_contains_exact_flat_payload(self):
@@ -71,6 +71,31 @@ class OpenInstallerTests(unittest.TestCase):
         for name, source in installer._files(str(self.payload)).items():
             self.assertEqual(Path(source).read_bytes(), (self.target / name).read_bytes())
         self.assert_no_transaction_files()
+
+    def test_manual_upgrade_from_flat_100_adds_public_updater(self):
+        self.target.mkdir()
+        (self.target / 'bg_version.py').write_text('__version__ = "1.0.0"\n')
+        (self.target / 'launcher.py').write_bytes(b'# 1.0.0 fixture without an updater')
+        self.install()
+        self.assertIn('1.0.1', (self.target / 'bg_version.py').read_text())
+        self.assertEqual((self.target / 'bg_update.py').read_bytes(), (self.payload / 'bg_update.py').read_bytes())
+        self.assert_no_transaction_files()
+
+    def test_an_unlocked_lock_file_does_not_block_installation_after_process_exit(self):
+        lock = self.scripts / 'Bake_Groups.install.lock'
+        lock.write_bytes(b'0')
+        self.install()
+        self.assertTrue((self.target / 'bg_update.py').is_file())
+        self.assertTrue(lock.is_file())
+
+    def test_concurrent_installation_lock_blocks_before_runtime_changes(self):
+        self.old_install()
+        with installer._install_lock(str(self.scripts)):
+            with self.assertRaisesRegex(installer.InstallError, 'Another installation'):
+                self.install()
+            self.assertTrue((self.target / 'versions/1.5.2/bg_main_window.py').is_file())
+        self.install()
+        self.assertFalse((self.target / 'versions').exists())
 
     def test_upgrade_old_higher_version_preserves_neighboring_user_files(self):
         self.old_install()
@@ -85,7 +110,7 @@ class OpenInstallerTests(unittest.TestCase):
         self.install()
         self.assertFalse((self.target / 'versions').exists())
         self.assertFalse((self.target / 'active_version.json').exists())
-        self.assertIn('1.0.0', (self.target / 'bg_version.py').read_text())
+        self.assertIn('1.0.1', (self.target / 'bg_version.py').read_text())
         self.assertEqual(scene.read_bytes(), b'artist scene fixture')
         self.assertEqual(license_record.read_bytes(), b'synthetic user record; not an actual license')
         self.assertEqual(other.read_bytes(), b'# user script')
@@ -139,6 +164,13 @@ class OpenInstallerTests(unittest.TestCase):
         (self.payload / 'bin/2024/bg_math_core.pyd').unlink()
         write_manifest(self.package)
         with self.assertRaisesRegex(installer.InstallError, 'incomplete'):
+            self.install()
+        self.assertFalse(self.target.exists())
+
+    def test_missing_public_updater_stops_before_installation(self):
+        (self.payload / 'bg_update.py').unlink()
+        write_manifest(self.package)
+        with self.assertRaisesRegex(installer.InstallError, 'incomplete: bg_update.py'):
             self.install()
         self.assertFalse(self.target.exists())
 
@@ -202,10 +234,14 @@ class OpenInstallerTests(unittest.TestCase):
             os.rmdir(str(self.target))
 
     def test_legacy_payload_is_not_mistaken_for_open_package(self):
-        (self.payload / 'bg_license.py').write_bytes(b'legacy fixture')
-        write_manifest(self.package)
-        with self.assertRaisesRegex(installer.InstallError, 'open-source flat'):
-            self.install()
+        for name in ('bg_license.py', 'bg_credentials.py'):
+            with self.subTest(name=name):
+                path = self.payload / name
+                path.write_bytes(b'legacy fixture')
+                write_manifest(self.package)
+                with self.assertRaisesRegex(installer.InstallError, 'open-source flat'):
+                    self.install()
+                path.unlink()
 
 
 if __name__ == '__main__':

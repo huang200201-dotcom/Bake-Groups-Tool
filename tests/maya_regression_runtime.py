@@ -52,6 +52,11 @@ _running = True
 atexit.register(shutdown)
 import maya.cmds as cmds
 
+# These are geometry/export regressions. Keep HTTP and update installation out
+# of their temporary Maya profile; update behavior has its own Qt/end-to-end
+# suites. No preference in the artist's Maya profile is touched.
+cmds.optionVar(intValue=('BakeMasterAutoUpdate', 0))
+
 REPO = Path(__file__).resolve().parents[1]
 RUNTIME = REPO / 'src' / 'Bake_Groups'
 sys.path.insert(0, str(RUNTIME))

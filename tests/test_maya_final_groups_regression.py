@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from maya_regression_runtime import APP, VERSION, cmds, shutdown
+from maya_regression_runtime import APP, VERSION, cmds, QtWidgets, shutdown
 import bg_main_window
 import bg_ui_widgets
 import bg_final_export
@@ -31,7 +31,10 @@ class FinalGroupWorkflowRegression(unittest.TestCase):
         self.ui.cb_keep_hp_structure.setChecked(False)
 
     def tearDown(self):
-        self.ui.close()
+        self.assertTrue(self.ui.shutdown_for_reload())
+        # MayaQWidgetDockableMixin.close() is a no-op for the parentless
+        # windows used by standalone. Invoke Qt's close path explicitly.
+        QtWidgets.QWidget.close(self.ui)
         APP.processEvents()
         bg_final_export.FinalExportProcessor._owned_export_uuids.clear()
 

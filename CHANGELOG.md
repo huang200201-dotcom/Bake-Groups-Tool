@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1 — 2026-09-29
+
+- Added public GitHub Release updates without accounts, activation, tokens, signatures or encrypted payloads.
+- Enabled automatic updates by default, with an opt-out checkbox and a manual check/download/apply action.
+- Added idle-time Python reloads; changed native modules already loaded in Maya are staged until Maya restarts and the plugin is opened again.
+- Added release checksums, safe archive extraction, update staging and transaction rollback; source checkouts are excluded from automatic replacement.
+- Changed the website action to open the project repository homepage.
+- Kept complete drag-and-drop installers. Version 1.0.0 users must install 1.0.1 manually once because 1.0.0 has no updater.
+
 ## 1.0.0 — 2026-09-29
 
 First open-source Bake Master release.

@@ -23,9 +23,9 @@ REQUIRED_SOURCE = (
     '__init__.py', 'launcher.py', 'bg_version.py', 'bg_main_window.py',
     'bg_core.py', 'bg_mixins.py', 'bg_final_export.py', 'bg_final_groups.py',
     'bg_scene_state.py', 'bg_worker_hp.py', 'bg_worker_lp.py',
-    'bg_cage.py', 'bg_localization.py', 'bg_ui_widgets.py',
+    'bg_cage.py', 'bg_localization.py', 'bg_ui_widgets.py', 'bg_update.py',
 )
-LEGACY_NAMES = {'bg_license.py', 'bg_credentials.py', 'bg_update.py',
+LEGACY_NAMES = {'bg_license.py', 'bg_credentials.py',
                 'active_version.json', 'license_config.json', 'update_config.json'}
 OLD_NATIVE_APIS = (b'activate_signed_license', b'deactivate_license', b'require_authorized')
 REPOSITORY_URL = 'https://github.com/huang200201-dotcom/Bake-Groups-Tool'

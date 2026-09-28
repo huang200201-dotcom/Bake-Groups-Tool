@@ -1,5 +1,6 @@
 """Fast local startup for the single-source Bake Master distribution."""
 import importlib
+import importlib.util
 import os
 import re
 import sys
@@ -17,7 +18,8 @@ WORKSPACE_CONTROL_NAME = "BakeManagerUIWorkspaceControl"
 RUNTIME_MODULES = (
     "bg_version", "bg_core", "bg_worker_hp", "bg_worker_lp",
     "bg_final_export", "bg_final_groups", "bg_scene_state", "bg_cage",
-    "bg_ui_widgets", "bg_localization", "bg_mixins", "bg_main_window",
+    "bg_ui_widgets", "bg_localization", "bg_mixins", "bg_main_window", "bg_update",
+    "launcher", "Bake_Groups.launcher",
 )
 
 def _path_is_inside(path, directory):
@@ -180,7 +182,70 @@ def _prepare_runtime():
     return runtime_dir
 
 
-def main():
+def _unfinished_update_transaction(update_dir):
+    path = os.path.join(update_dir, "transaction.json")
+    if not os.path.lexists(path):
+        return False
+    try:
+        import json
+        with open(path, "r", encoding="utf-8") as stream:
+            return json.load(stream).get("state") != "committed"
+    except Exception:
+        # Never import a potentially mixed runtime when recovery state is lost.
+        return True
+
+
+def _apply_ready_update(runtime_dir):
+    """Apply a verified staged update before importing any new runtime code.
+
+    No network access occurs here. A changed loaded DLL stays untouched until
+    Maya restarts; identical DLLs can remain loaded during a Python hot reload.
+    """
+    update_dir = os.path.join(os.path.dirname(runtime_dir), "Bake_Groups.update")
+    if not any(os.path.isfile(os.path.join(update_dir, name))
+               for name in ("pending.json", "transaction.json")):
+        return False
+    update_file = os.path.join(runtime_dir, "bg_update.py")
+    if not os.path.isfile(update_file):
+        return False
+    spec = importlib.util.spec_from_file_location("_bake_master_startup_update", update_file)
+    updater = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(updater)
+        if updater.pending_update(runtime_dir) is None:
+            return False
+        if updater.requires_restart(runtime_dir):
+            if _unfinished_update_transaction(update_dir):
+                raise RuntimeError("Restart Maya to recover an interrupted Bake Master native update.")
+            cmds.warning("Bake Master update is ready. Restart Maya to apply its native module update.")
+            return False
+        # No files change until every existing UI/geometry worker has stopped.
+        _shutdown_existing_bake_groups_ui()
+        result = updater.apply_pending(runtime_dir)
+        return bool(result and result.get("status") == "applied")
+    except Exception as exc:
+        if _unfinished_update_transaction(update_dir):
+            raise RuntimeError(
+                "Bake Master update recovery is incomplete. Restart Maya and open Bake Master "
+                "to retry recovery. Keep the Bake_Groups.update folder. Details: {}".format(exc)
+            )
+        cmds.warning("Bake Master update could not be applied: {}".format(exc))
+        return False
+
+
+def _launch_updated_runtime(runtime_dir):
+    """Run the newly installed launcher too, rather than keeping its old code."""
+    path = os.path.join(runtime_dir, "launcher.py")
+    namespace = {"__file__": path, "__name__": "_bake_master_updated_launcher"}
+    with open(path, "rb") as stream:
+        exec(compile(stream.read(), path, "exec"), namespace, namespace)
+    return namespace["main"](_skip_update=True)
+
+
+def main(_skip_update=False):
+    runtime_dir = os.path.dirname(os.path.abspath(__file__))
+    if not _skip_update and _apply_ready_update(runtime_dir):
+        return _launch_updated_runtime(runtime_dir)
     runtime_dir = _prepare_runtime()
     if _restore_existing_ui(runtime_dir):
         return sys.modules["bg_main_window"].bake_manager_ui

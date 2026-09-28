@@ -21,8 +21,8 @@ import uuid
 SUPPORTED_MAYA = ('2022', '2023', '2024', '2025', '2026', '2027')
 BUTTON_LABEL = 'BAKE MASTER'
 BUTTON_ANNOTATION = u'打开 Bake Master 开源版'
-REQUIRED_FILES = ('__init__.py', 'launcher.py', 'bg_version.py', 'bg_main_window.py')
-LEGACY_FILES = ('bg_license.py', 'bg_credentials.py', 'bg_update.py',
+REQUIRED_FILES = ('__init__.py', 'launcher.py', 'bg_version.py', 'bg_main_window.py', 'bg_update.py')
+LEGACY_FILES = ('bg_license.py', 'bg_credentials.py',
                 'active_version.json', 'license_config.json', 'update_config.json')
 
 
@@ -158,16 +158,35 @@ def _managed_remove(path, scripts_dir, prefix):
 
 @contextlib.contextmanager
 def _install_lock(scripts_dir):
+    # Share byte zero with the public updater. Keep the file: the operating
+    # system releases the lock on process exit, including an interrupted update.
     path = os.path.join(scripts_dir, 'Bake_Groups.install.lock')
+    _reject_links(path)
+    stream = open(path, 'a+b')
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except OSError as exc:
-        raise InstallError('Another installation may be running; cannot create installation lock: ' + str(exc))
-    try:
-        os.close(descriptor)
-        yield
+        if os.path.getsize(path) == 0:
+            stream.write(b'0')
+            stream.flush()
+        stream.seek(0)
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise InstallError('Another installation or update is running')
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == 'nt':
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
     finally:
-        os.remove(path)
+        stream.close()
 
 
 def install_package(package_dir, scripts_dir, loaded_modules=None):

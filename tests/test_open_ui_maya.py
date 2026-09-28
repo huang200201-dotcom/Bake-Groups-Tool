@@ -9,6 +9,8 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -77,11 +79,42 @@ class OpenUIRegression(unittest.TestCase):
         exception_guard = mock.patch('sys.excepthook', side_effect=lambda *exc: self.qt_errors.append(exc))
         exception_guard.start()
         self.addCleanup(exception_guard.stop)
+        self.updates = self.main.bg_update
+        self.checker = self._patch_update('check_for_update', return_value=None)
+        self.downloader = self._patch_update('download_and_stage', return_value={'version': '9.9.9', 'status': 'pending'})
+        self.pending = self._patch_update('pending_update', return_value=None)
+        self.restart = self._patch_update('requires_restart', return_value=False)
+        self.messages = mock.patch.object(self.QtWidgets.QMessageBox, 'information', return_value=self.QtWidgets.QMessageBox.Ok)
+        self.info = self.messages.start()
+        self.addCleanup(self.messages.stop)
+        warnings = mock.patch.object(self.QtWidgets.QMessageBox, 'warning', return_value=self.QtWidgets.QMessageBox.Ok)
+        self.warning = warnings.start()
+        self.addCleanup(warnings.stop)
+        self.main._update_process_state()['auto_checked'] = False
+        if self.cmds.optionVar(exists=self.main._AUTO_UPDATE_OPTION):
+            self.cmds.optionVar(remove=self.main._AUTO_UPDATE_OPTION)
         self.ui = self.main.BakeManagerUI()
+        self.startup_timer_remaining = self.ui.auto_update_timer.remainingTime()
+        self.ui.auto_update_timer.stop()
+
+    def _patch_update(self, name, **kwargs):
+        patcher = mock.patch.object(self.updates, name, **kwargs)
+        result = patcher.start()
+        self.addCleanup(patcher.stop)
+        return result
+
+    def wait_for(self, predicate, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while not predicate() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.005)
+        self.app.processEvents()
+        self.assertTrue(predicate(), 'Timed out waiting for background update')
 
     def tearDown(self):
-        self.ui.close()
-        self.app.processEvents()
+        if not getattr(self, 'closed_early', False):
+            self.QtWidgets.QWidget.close(self.ui)
+        self.wait_for(lambda: not self.main._update_process_state()['workers'])
         self.network_request.assert_not_called()
         self.assertEqual(self.qt_errors, [], 'An exception escaped a Qt signal handler')
 
@@ -93,7 +126,7 @@ class OpenUIRegression(unittest.TestCase):
         self.ui.root_pairs.append(pair)
         return pair, hp, lp
 
-    def test_two_workspaces_without_licensing_or_background_updater(self):
+    def test_two_workspaces_without_licensing_and_three_localized_update_actions(self):
         self.assertEqual(self.ui.workspace_tabs.count(), 2)
         for language, expected in (
                 ('en', ['Automatic Grouping', 'Asset Tasks']),
@@ -101,21 +134,143 @@ class OpenUIRegression(unittest.TestCase):
             self.l10n.set_language(language)
             self.ui.refresh_localized_ui()
             self.assertEqual([self.ui.workspace_tabs.tabText(i) for i in range(2)], expected)
-        for attribute in ('gt_widget', 'update_timer', 'update_check_worker',
-                          'update_install_worker', 'update_menu'):
-            self.assertFalse(hasattr(self.ui, attribute), attribute)
-        for module in ('bg_license', 'bg_credentials', 'bg_update', 'bg_gt_matcher'):
+            labels = ['Automatic Updates', 'Manual Update', 'Visit Repository Website'] if language == 'en' else ['自动更新', '手动更新', '访问仓库网站']
+            self.assertEqual([action.text() for action in self.ui.update_menu.actions()], labels)
+        self.assertFalse(hasattr(self.ui, 'gt_widget'))
+        for module in ('bg_license', 'bg_credentials', 'bg_gt_matcher'):
             self.assertNotIn(module, sys.modules)
-        self.assertEqual(self.ui.lbl_runtime_version.text(), 'v1.0')
-        self.assertEqual(self.ui.windowTitle(), 'Bake Master 1.0')
+        self.assertEqual(self.ui.lbl_runtime_version.text(), 'v' + self.version.VERSION)
+        self.assertEqual(self.ui.windowTitle(), 'Bake Master ' + self.version.VERSION)
 
-    def test_releases_button_only_opens_public_download_page(self):
+    def test_repository_action_opens_repo_root_and_auto_preference_persists(self):
         with mock.patch.object(self.QtGui.QDesktopServices, 'openUrl', return_value=True) as opened:
-            self.ui.btn_releases.click()
+            self.ui.action_open_repository.trigger()
         opened.assert_called_once()
-        self.assertEqual(opened.call_args[0][0].toString(), self.version.RELEASES_URL)
-        self.assertIsNone(self.ui.btn_releases.menu())
-        self.assertTrue(self.ui.btn_releases.toolTip())
+        self.assertEqual(opened.call_args[0][0].toString(), self.version.REPOSITORY_URL)
+        self.assertTrue(self.ui.action_auto_update.isChecked())
+        self.ui.action_auto_update.setChecked(False)
+        self.assertEqual(self.cmds.optionVar(query=self.main._AUTO_UPDATE_OPTION), 0)
+        other = self.main.BakeManagerUI()
+        try:
+            self.assertFalse(other.action_auto_update.isChecked())
+            self.assertFalse(other.auto_update_timer.isActive())
+        finally:
+            self.QtWidgets.QWidget.close(other)
+        self.ui.action_auto_update.setChecked(True)
+        self.wait_for(lambda: self.checker.call_count == 1 and not self.main._update_process_state()['workers'])
+        self.assertEqual(self.cmds.optionVar(query=self.main._AUTO_UPDATE_OPTION), 1)
+
+    def test_automatic_check_is_delayed_off_thread_and_once_per_process(self):
+        self.assertGreater(self.startup_timer_remaining, 1000)
+        self.checker.assert_not_called()
+        thread_ids = []
+        self.checker.side_effect = lambda *args, **kwargs: thread_ids.append(threading.get_ident()) or None
+        self.ui.auto_update_timer.start(1)
+        self.wait_for(lambda: len(thread_ids) == 1 and not self.main._update_process_state()['workers'])
+        self.assertNotEqual(thread_ids[0], threading.get_ident())
+        self.info.assert_not_called()
+        self.ui._start_automatic_update()
+        self.app.processEvents()
+        self.assertEqual(len(thread_ids), 1)
+        self.ui.action_manual_update.trigger()
+        self.wait_for(lambda: len(thread_ids) == 2 and not self.main._update_process_state()['workers'])
+        self.info.assert_called_once()
+
+    def test_manual_current_version_and_failure_feedback_automatic_failure_is_nonmodal(self):
+        self.ui.action_manual_update.trigger()
+        self.wait_for(lambda: not self.main._update_process_state()['workers'])
+        self.assertIn('up to date', self.info.call_args[0][2])
+        self.checker.side_effect = RuntimeError('offline fixture')
+        self.ui.action_manual_update.trigger()
+        self.wait_for(lambda: not self.main._update_process_state()['workers'])
+        self.assertIn('offline fixture', self.warning.call_args[0][2])
+        self.warning.reset_mock()
+        self.ui.start_update_check(manual=False)
+        self.wait_for(lambda: not self.main._update_process_state()['workers'])
+        self.warning.assert_not_called()
+        self.assertIn('offline fixture', self.ui._update_status)
+
+    def test_download_stages_off_thread_busy_defers_and_native_requires_restart(self):
+        self.checker.return_value = {'version': '9.9.9'}
+        download_threads = []
+        self.downloader.side_effect = lambda *args, **kwargs: download_threads.append(threading.get_ident()) or {'version': '9.9.9', 'status': 'pending'}
+        self.ui._hp_task_finalized = False
+        self.ui.start_update_check(manual=False)
+        self.wait_for(lambda: self.ui._pending_update is not None and not self.main._update_process_state()['workers'])
+        self.assertNotEqual(download_threads[0], threading.get_ident())
+        import maya.utils
+        with mock.patch.object(maya.utils, 'executeDeferred') as deferred:
+            self.ui._try_apply_pending_update()
+            deferred.assert_not_called()
+            self.assertTrue(self.ui.pending_update_timer.isActive())
+            self.ui._hp_task_finalized = True
+            self.restart.return_value = True
+            self.ui._try_apply_pending_update()
+            deferred.assert_not_called()
+            self.assertIn('Restart Maya', self.ui._update_status)
+            self.restart.return_value = False
+            self.ui._try_apply_pending_update()
+            deferred.assert_called_once()
+        self.ui.pending_update_timer.stop()
+        self.ui._update_apply_scheduled = False
+
+    def test_pending_reload_preserves_task_context_and_does_not_save_untouched_scene(self):
+        pair, _hp, _lp = self.make_pair('Asset')
+        self.ui.active_root_id = pair['id']
+        self.ui.active_subgroup_name = 'Main'
+        self.ui.workspace_tabs.setCurrentIndex(1)
+        new_ui = mock.Mock(root_pairs=[pair])
+        import launcher
+        self.cmds.file(modified=False)
+        with mock.patch.object(launcher, 'main', return_value=new_ui), mock.patch.object(self.core.BakeSessionModel, 'save') as save:
+            self.ui._apply_pending_update_when_idle()
+        save.assert_not_called()
+        self.assertFalse(self.cmds.file(query=True, modified=True))
+        self.assertEqual(new_ui.active_root_id, 'Asset')
+        self.assertEqual(new_ui.active_subgroup_name, 'Main')
+        new_ui.workspace_tabs.setCurrentIndex.assert_called_once_with(1)
+
+    def test_close_and_disable_cancel_network_worker_without_destroying_running_thread(self):
+        entered = threading.Event()
+        cancelled = threading.Event()
+        def block_until_cancelled(*args, **kwargs):
+            entered.set()
+            while not kwargs['cancelled']():
+                time.sleep(0.005)
+            cancelled.set()
+            raise self.updates.UpdateCancelled('cancelled fixture')
+        self.checker.side_effect = block_until_cancelled
+        self.ui.start_update_check(manual=False)
+        self.wait_for(entered.is_set)
+        worker = self.ui.update_worker
+        self.assertIn(worker, self.main._update_process_state()['workers'])
+        self.ui.action_auto_update.setChecked(False)
+        self.wait_for(lambda: cancelled.is_set() and not self.main._update_process_state()['workers'])
+        entered.clear()
+        cancelled.clear()
+        release = threading.Event()
+        self.addCleanup(release.set)
+        self.checker.side_effect = None
+        self.checker.return_value = {'version': '9.9.9'}
+        def download_until_cancelled(*args, **kwargs):
+            try:
+                return block_until_cancelled(*args, **kwargs)
+            finally:
+                release.wait(timeout=2)
+        self.downloader.side_effect = download_until_cancelled
+        self.ui.start_update_check(manual=True)
+        self.wait_for(entered.is_set)
+        worker = self.ui.update_worker
+        started = time.monotonic()
+        self.assertTrue(self.QtWidgets.QWidget.close(self.ui))
+        self.closed_early = True
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.app.processEvents()
+        self.assertTrue(worker.isRunning())
+        self.assertIn(worker, self.main._update_process_state()['workers'])
+        release.set()
+        self.wait_for(lambda: cancelled.is_set() and not self.main._update_process_state()['workers'])
+        self.warning.assert_not_called()
 
     def test_asset_task_switching_and_saved_custom_groups(self):
         first, _hp, _lp = self.make_pair('Asset')

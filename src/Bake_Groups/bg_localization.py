@@ -23,6 +23,78 @@ _DEFAULT_LANG = "en"
 _CURRENT_LANG = None
 _LANGUAGE_OPTION_VAR = "BakeGroupsLanguage"
 
+# Update controls ship with the runtime so staged Python updates can introduce
+# their labels even when a user's optional translation files are older.
+_UPDATE_TEXTS = {
+    'en': {
+        'Updates': 'Updates',
+        'Automatic Updates': 'Automatic Updates',
+        'Manual Update': 'Manual Update',
+        'Visit Repository Website': 'Visit Repository Website',
+        'Checking for updates...': 'Checking for updates...',
+        'Downloading update {version}...': 'Downloading update {version}...',
+        'Bake Master is up to date.': 'Bake Master is up to date.',
+        'Update failed: {error}': 'Update failed: {error}',
+        'An update is already in progress.': 'An update is already in progress.',
+        'Automatic update cancelled.': 'Automatic update cancelled.',
+        'Update {version} is ready; waiting until Bake Master is idle.': 'Update {version} is ready; waiting until Bake Master is idle.',
+        'Update is ready. Restart Maya, then open Bake Master to finish installing.': 'Update is ready. Restart Maya, then open Bake Master to finish installing.',
+    },
+    'zh-CN': {
+        'Updates': '更新',
+        'Automatic Updates': '自动更新',
+        'Manual Update': '手动更新',
+        'Visit Repository Website': '访问仓库网站',
+        'Checking for updates...': '正在检查更新…',
+        'Downloading update {version}...': '正在下载更新 {version}…',
+        'Bake Master is up to date.': 'Bake Master 已是最新版本。',
+        'Update failed: {error}': '更新失败：{error}',
+        'An update is already in progress.': '更新正在进行中。',
+        'Automatic update cancelled.': '已取消自动更新。',
+        'Update {version} is ready; waiting until Bake Master is idle.': '更新 {version} 已准备好，等待 Bake Master 空闲后应用。',
+        'Update is ready. Restart Maya, then open Bake Master to finish installing.': '更新已准备好。请重启 Maya，然后打开 Bake Master 完成安装。',
+    },
+    'ja': {
+        'Updates': '更新',
+        'Automatic Updates': '自動更新',
+        'Manual Update': '手動更新',
+        'Visit Repository Website': 'リポジトリを開く',
+        'Checking for updates...': '更新を確認しています…',
+        'Downloading update {version}...': '更新 {version} をダウンロードしています…',
+        'Bake Master is up to date.': 'Bake Master は最新です。',
+        'Update failed: {error}': '更新に失敗しました: {error}',
+        'An update is already in progress.': '更新は既に進行中です。',
+        'Automatic update cancelled.': '自動更新をキャンセルしました。',
+        'Update {version} is ready; waiting until Bake Master is idle.': '更新 {version} の準備が完了しました。処理が終了するまで待機します。',
+        'Update is ready. Restart Maya, then open Bake Master to finish installing.': '更新の準備が完了しました。Maya を再起動し、Bake Master を開いてインストールを完了してください。',
+    },
+    'ru': {
+        'Updates': 'Обновления',
+        'Automatic Updates': 'Автообновление',
+        'Manual Update': 'Обновить вручную',
+        'Visit Repository Website': 'Открыть репозиторий',
+        'Checking for updates...': 'Проверка обновлений…',
+        'Downloading update {version}...': 'Загрузка обновления {version}…',
+        'Bake Master is up to date.': 'Установлена последняя версия Bake Master.',
+        'Update failed: {error}': 'Ошибка обновления: {error}',
+        'An update is already in progress.': 'Обновление уже выполняется.',
+        'Automatic update cancelled.': 'Автообновление отменено.',
+        'Update {version} is ready; waiting until Bake Master is idle.': 'Обновление {version} готово; ожидание завершения работы Bake Master.',
+        'Update is ready. Restart Maya, then open Bake Master to finish installing.': 'Обновление готово. Перезапустите Maya и откройте Bake Master для завершения установки.',
+    },
+}
+_UPDATE_TOOLTIPS = {
+    'en': ('Check, download and apply updates automatically when Bake Master is idle.',
+           'Check for a new version now, download it and apply it when idle.',
+           'Open the Bake Master GitHub repository.'),
+    'zh-CN': ('自动检查、下载更新，并在 Bake Master 空闲时应用。',
+              '立即检查新版本、下载更新，并在空闲时应用。', '打开 Bake Master 的 GitHub 仓库首页。'),
+    'ja': ('更新を自動確認・ダウンロードし、処理が終了したら適用します。',
+           '新しいバージョンを確認・ダウンロードし、処理が終了したら適用します。', 'Bake Master の GitHub リポジトリを開きます。'),
+    'ru': ('Автоматически проверять и загружать обновления; применять после завершения работы.',
+           'Проверить и загрузить новую версию; применить после завершения работы.', 'Открыть репозиторий Bake Master на GitHub.'),
+}
+
 
 def _localization_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "localization")
@@ -101,6 +173,11 @@ def load_language(lang=None):
         except Exception as exc:
             print("Bake Master localization load failed for '{}': {}".format(path, exc))
 
+    data['texts'].update(_UPDATE_TEXTS.get(lang, _UPDATE_TEXTS['en']))
+    tips = _UPDATE_TOOLTIPS.get(lang, _UPDATE_TOOLTIPS['en'])
+    data['tooltips'].update(dict(zip(
+        ('Automatic Updates', 'Manual Update', 'Visit Repository Website'), tips)))
+    data['tooltips']['Updates'] = data['texts']['Updates']
     _CACHE[lang] = data
     return data
 

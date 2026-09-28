@@ -20,6 +20,7 @@ import bg_scene_state
 import bg_final_export
 import bg_localization as bg_l10n
 import bg_version
+import bg_update
 
 from bg_worker_hp import HPGroupingWorker
 from bg_worker_lp import LPMatchingWorker
@@ -48,6 +49,62 @@ except Exception:
 
 
 _DETACHED_WORKERS = set()
+_AUTO_UPDATE_OPTION = 'BakeMasterAutoUpdate'
+
+
+def _update_process_state():
+    # sys survives launcher module reloads, so automatic checks run only once
+    # per Maya process and cancelled threads outlive a closed window safely.
+    if not hasattr(sys, '_bake_master_update_state'):
+        sys._bake_master_update_state = {'auto_checked': False, 'workers': set(), 'quit_connected': False}
+    return sys._bake_master_update_state
+
+
+def _release_update_worker(worker):
+    _update_process_state()['workers'].discard(worker)
+    worker.deleteLater()
+
+
+def _shutdown_update_workers():
+    workers = list(_update_process_state()['workers'])
+    for worker in workers:
+        worker.requestInterruption()
+    # Only application shutdown waits. Normal window close is non-blocking;
+    # the backend bounds cancellation latency with a 15-second socket timeout.
+    for worker in workers:
+        worker.wait()
+
+
+class UpdateWorker(QtCore.QThread):
+    staged = QtCore.Signal(dict)
+    no_update = QtCore.Signal()
+    failed = QtCore.Signal(str)
+    downloading = QtCore.Signal(str)
+
+    def __init__(self, current_version, runtime_dir):
+        super(UpdateWorker, self).__init__(None)
+        self.current_version = current_version
+        self.runtime_dir = runtime_dir
+
+    def run(self):
+        try:
+            release = bg_update.check_for_update(
+                self.current_version, cancelled=self.isInterruptionRequested)
+            if self.isInterruptionRequested():
+                return
+            if not release:
+                self.no_update.emit()
+                return
+            self.downloading.emit(str(release.get('version', '')))
+            pending = bg_update.download_and_stage(
+                release, self.runtime_dir, cancelled=self.isInterruptionRequested)
+            if not self.isInterruptionRequested():
+                self.staged.emit(pending)
+        except bg_update.UpdateCancelled:
+            pass
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                self.failed.emit(str(exc))
 
 
 def _release_detached_worker(worker):
@@ -101,7 +158,7 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
                     ExportMixin, GroupManagementMixin, SceneInteractionMixin, TOCMixin):
     def __init__(self, parent=None):
         super(BakeManagerUI, self).__init__(parent=parent)
-        self.setWindowTitle("Bake Master 1.0")
+        self.setWindowTitle("Bake Master {}".format(bg_version.VERSION))
         self.setObjectName("BakeManagerUI")
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
         self.setMinimumSize(380, 400)
@@ -162,6 +219,13 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
         self.progress_dlg_lp = None
         self._hp_task_finalized = True
         self._lp_task_finalized = True
+        self.update_worker = None
+        self._update_manual = False
+        self._pending_update = None
+        self._update_apply_scheduled = False
+        self._update_status = ''
+        self._auto_check_explicit = False
+        self._update_runtime_dir = os.path.dirname(os.path.abspath(__file__))
 
         self.init_ui()
         self.install_bg_undo_shortcut()
@@ -170,6 +234,7 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
         self.refresh_right_panel()
         self.refresh_left_panel()
         self.setup_script_jobs()
+        self.setup_update_system()
 
     # ------------------------------------------------------------------------
     # UI Initialization
@@ -218,16 +283,26 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
         self.lbl_current_task.setSizePolicy(current_policy)
         header_layout.addWidget(self.lbl_current_task, 1)
 
-        self.btn_releases = QtWidgets.QToolButton()
-        self.btn_releases.setObjectName("HeaderIconButton")
-        self.btn_releases.setFixedSize(32, 32)
-        self.btn_releases.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogHelpButton))
-        self.btn_releases.setIconSize(QtCore.QSize(17, 17))
-        self.btn_releases.setProperty("bg_preserve_text", True)
-        self.btn_releases.setProperty("bg_i18n_key", "GitHub Releases")
-        self.btn_releases.setAccessibleName("GitHub Releases")
-        self.btn_releases.clicked.connect(self.open_release_page)
-        header_layout.addWidget(self.btn_releases)
+        self.btn_update = QtWidgets.QToolButton()
+        self.btn_update.setObjectName("HeaderIconButton")
+        self.btn_update.setFixedSize(32, 32)
+        self.btn_update.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
+        self.btn_update.setIconSize(QtCore.QSize(17, 17))
+        self.btn_update.setProperty("bg_preserve_text", True)
+        self.btn_update.setProperty("bg_i18n_key", "Updates")
+        self.btn_update.setAccessibleName("Updates")
+        self.btn_update.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.update_menu = QtWidgets.QMenu(self.btn_update)
+        self.action_auto_update = self.update_menu.addAction('Automatic Updates')
+        self.action_auto_update.setCheckable(True)
+        self.action_auto_update.setChecked(self.auto_update_enabled())
+        self.action_auto_update.toggled.connect(self.set_auto_update_enabled)
+        self.action_manual_update = self.update_menu.addAction('Manual Update')
+        self.action_manual_update.triggered.connect(lambda checked=False: self.start_update_check(manual=True))
+        self.action_open_repository = self.update_menu.addAction('Visit Repository Website')
+        self.action_open_repository.triggered.connect(self.open_repository_page)
+        self.btn_update.setMenu(self.update_menu)
+        header_layout.addWidget(self.btn_update)
 
         self.btn_language = QtWidgets.QPushButton("Language")
         self.btn_language.setObjectName("HeaderButton")
@@ -246,7 +321,7 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
         footer_layout.setContentsMargins(2, 0, 2, 0)
         footer_layout.addStretch(1)
         self.lbl_runtime_version = QtWidgets.QLabel(
-            "v{}".format(".".join(bg_version.VERSION.split(".")[:2]))
+            "v{}".format(bg_version.VERSION)
         )
         self.lbl_runtime_version.setObjectName("RuntimeVersion")
         self.lbl_runtime_version.setToolTip("Bake Master v{}".format(
@@ -2691,6 +2766,12 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
         if not analysis_stopped:
             self._is_closing = False
             return False
+        self.auto_update_timer.stop()
+        self.pending_update_timer.stop()
+        if self.update_worker:
+            self.update_worker.requestInterruption()
+            # The process registry owns it until finished, not the window.
+            self.update_worker = None
         try:
             with self._suspend_maya_undo_recording():
                 self.restore_subgroup_colors()
@@ -2719,6 +2800,10 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
             event.ignore()
             return
         super(BakeManagerUI, self).closeEvent(event)
+
+    def dockCloseEventTriggered(self):
+        # Maya's workspaceControl close callback bypasses QWidget.closeEvent.
+        self.shutdown_for_reload()
 
     def reload_data_from_scene(self):
         try:
@@ -2776,9 +2861,182 @@ class BakeManagerUI(MayaQWidgetDockableMixin, QtWidgets.QMainWindow, _Cooperativ
                     self.sync_toggle_buttons(hp_main, lp_main)
         cmds.inViewMessage(amg=bg_l10n.text("Language switched to {name}").format(name=code), pos='midCenter', fade=True)
 
-    def open_release_page(self):
-        """Open release downloads only after an explicit user click."""
-        return QtGui.QDesktopServices.openUrl(QtCore.QUrl(bg_version.RELEASES_URL))
+    def open_repository_page(self):
+        return QtGui.QDesktopServices.openUrl(QtCore.QUrl(bg_version.REPOSITORY_URL))
+
+    def auto_update_enabled(self):
+        if cmds.optionVar(exists=_AUTO_UPDATE_OPTION):
+            return bool(cmds.optionVar(query=_AUTO_UPDATE_OPTION))
+        return True
+
+    def set_auto_update_enabled(self, enabled):
+        cmds.optionVar(intValue=(_AUTO_UPDATE_OPTION, int(bool(enabled))))
+        if enabled:
+            # An explicit opt-in checks now even if a previous automatic
+            # attempt already ran in this Maya process.
+            self._auto_check_explicit = True
+            self.auto_update_timer.start(0)
+        else:
+            self.auto_update_timer.stop()
+            if self.update_worker and not self._update_manual:
+                self.update_worker.requestInterruption()
+                self._set_update_status(bg_l10n.text('Automatic update cancelled.'))
+
+    def setup_update_system(self):
+        self.auto_update_timer = QtCore.QTimer(self)
+        self.auto_update_timer.setSingleShot(True)
+        self.auto_update_timer.timeout.connect(self._start_automatic_update)
+        self.pending_update_timer = QtCore.QTimer(self)
+        self.pending_update_timer.setSingleShot(True)
+        self.pending_update_timer.timeout.connect(self._try_apply_pending_update)
+        state = _update_process_state()
+        if not state['quit_connected']:
+            QtWidgets.QApplication.instance().aboutToQuit.connect(_shutdown_update_workers)
+            state['quit_connected'] = True
+        if self.auto_update_enabled() and not state['auto_checked']:
+            self.auto_update_timer.start(1500)
+        # Staging is local metadata; opening the UI never waits for HTTP.
+        try:
+            self._pending_update = bg_update.pending_update(self._update_runtime_dir)
+        except Exception as exc:
+            self._set_update_status(bg_l10n.text('Update failed: {error}').format(error=exc))
+        if self._pending_update:
+            self.pending_update_timer.start(2000)
+
+    def _start_automatic_update(self):
+        explicit = self._auto_check_explicit
+        self._auto_check_explicit = False
+        if _update_process_state()['auto_checked'] and not explicit:
+            return
+        if self.auto_update_enabled() and not self._is_closing:
+            self.start_update_check(manual=False)
+
+    def _set_update_status(self, message):
+        self._update_status = message or ''
+        self.btn_update.setToolTip(message or bg_l10n.tooltip('Updates'))
+        if message:
+            self.statusBar().showMessage(message, 15000)
+
+    def start_update_check(self, manual=False):
+        if self._is_closing:
+            return
+        if _update_process_state()['workers']:
+            if manual:
+                self._set_update_status(bg_l10n.text('An update is already in progress.'))
+            return
+        if not manual:
+            _update_process_state()['auto_checked'] = True
+        self._update_manual = bool(manual)
+        worker = UpdateWorker(bg_version.VERSION, self._update_runtime_dir)
+        self.update_worker = worker
+        _update_process_state()['workers'].add(worker)
+        self.destroyed.connect(worker.requestInterruption)
+        worker.no_update.connect(self._on_no_update)
+        worker.failed.connect(self._on_update_error)
+        worker.downloading.connect(self._on_update_downloading)
+        worker.staged.connect(self._on_update_staged)
+        worker.finished.connect(self._on_update_finished)
+        worker.finished.connect(lambda w=worker: _release_update_worker(w))
+        self._set_update_status(bg_l10n.text('Checking for updates...'))
+        worker.start()
+
+    def _on_update_downloading(self, version):
+        if not self._is_closing:
+            self._set_update_status(bg_l10n.text('Downloading update {version}...').format(version=version))
+
+    def _on_no_update(self):
+        if self._is_closing:
+            return
+        self._set_update_status('')
+        self.statusBar().clearMessage()
+        if self._update_manual:
+            QtWidgets.QMessageBox.information(self, bg_l10n.text('Updates'), bg_l10n.text('Bake Master is up to date.'))
+
+    def _on_update_error(self, error):
+        if self._is_closing:
+            return
+        message = bg_l10n.text('Update failed: {error}').format(error=error)
+        self._set_update_status(message)
+        self.log(message, 'orange')
+        if self._update_manual:
+            QtWidgets.QMessageBox.warning(self, bg_l10n.text('Updates'), message)
+
+    def _on_update_staged(self, pending):
+        if self._is_closing:
+            return
+        self._pending_update = pending
+        self._set_update_status(bg_l10n.text('Update {version} is ready; waiting until Bake Master is idle.').format(
+            version=pending.get('version', '')))
+        self.pending_update_timer.start(250)
+
+    def _on_update_finished(self):
+        if self.sender() is self.update_worker:
+            self.update_worker = None
+
+    def _update_ui_busy(self):
+        if self._is_closing or self.update_worker is not None:
+            return True
+        for worker in list(vars(self).values()):
+            if isinstance(worker, QtCore.QThread):
+                try:
+                    if worker.isRunning():
+                        return True
+                except RuntimeError:
+                    pass
+        if not self._hp_task_finalized or not self._lp_task_finalized:
+            return True
+        if any(bool(getattr(self, name, False)) for name in (
+                '_bg_undo_running', '_bg_undo_restoring', '_scene_change_pending',
+                '_hp_apply_started', '_lp_apply_started', '_export_view_depth')):
+            return True
+        if QtWidgets.QApplication.activeModalWidget() or QtWidgets.QApplication.activePopupWidget():
+            return True
+        return any(widget.isVisible() for widget in self.findChildren(QtWidgets.QProgressDialog))
+
+    def _try_apply_pending_update(self):
+        if self._is_closing or not self._pending_update or self._update_apply_scheduled:
+            return
+        if self._update_ui_busy():
+            self.pending_update_timer.start(1000)
+            return
+        try:
+            if bg_update.requires_restart(self._update_runtime_dir):
+                message = bg_l10n.text('Update is ready. Restart Maya, then open Bake Master to finish installing.')
+                self._set_update_status(message)
+                if self._update_manual:
+                    QtWidgets.QMessageBox.information(self, bg_l10n.text('Updates'), message)
+                return
+            self._update_apply_scheduled = True
+            import maya.utils
+            maya.utils.executeDeferred(self._apply_pending_update_when_idle)
+        except Exception as exc:
+            self._on_update_error(str(exc))
+
+    def _apply_pending_update_when_idle(self):
+        self._update_apply_scheduled = False
+        if self._is_closing:
+            return
+        if self._update_ui_busy():
+            self.pending_update_timer.start(1000)
+            return
+        try:
+            # User actions already persist their session. Updating must not
+            # dirty an untouched scene just to write the same data again.
+            context = (self.active_root_id, self.active_subgroup_name,
+                       self.is_final_view, self.workspace_tabs.currentIndex())
+            import launcher
+            new_ui = launcher.main()
+            if new_ui is not None and new_ui is not self:
+                active, subgroup, final_view, tab_index = context
+                if any(pair.get('id') == active for pair in new_ui.root_pairs):
+                    new_ui.active_root_id = active
+                    new_ui.active_subgroup_name = subgroup
+                    new_ui.is_final_view = final_view
+                    new_ui.refresh_right_panel()
+                    new_ui.refresh_left_panel()
+                new_ui.workspace_tabs.setCurrentIndex(tab_index)
+        except Exception as exc:
+            self._on_update_error(str(exc))
 
     def load_custom_session(self):
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, bg_l10n.text("Select session file"), "", bg_l10n.text("JSON Files (*.json)"))
