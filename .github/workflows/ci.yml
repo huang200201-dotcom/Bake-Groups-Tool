@@ -1,0 +1,37 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit regressions
+        run: python -m unittest discover -s tests -p 'test_*.py' -q
+      - name: Runtime syntax
+        run: python -m compileall -q src installer tools
+      - name: Install build dependency
+        run: python -m pip install pybind11==2.13.6
+      - name: Configure native extension
+        shell: pwsh
+        run: |
+          $pybindDir = python -m pybind11 --cmakedir
+          cmake -S . -B build/ci -A x64 "-Dpybind11_DIR=$pybindDir" "-DPython_EXECUTABLE=$((Get-Command python).Source)"
+      - name: Build native extension
+        run: cmake --build build/ci --config Release --parallel
+      - name: Native math regressions
+        shell: pwsh
+        run: |
+          $env:BG_NATIVE_TEST_BIN = (Resolve-Path build/ci/Release).Path
+          python tests/test_native_math_core.py

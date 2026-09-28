@@ -1,0 +1,23 @@
+name: Bug report / 问题反馈
+description: Report a reproducible Bake Master problem.
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Bake Master / Maya version
+      placeholder: 'Bake Master 1.0.0 / Maya 2027 / Windows 11'
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps / 复现步骤
+      description: Include expected and actual behavior; use non-confidential sample geometry.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Script Editor output / 错误日志
+      description: Remove personal paths and confidential scene details.
+      render: text

@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.18)
+project(BakeMasterNative LANGUAGES CXX)
+
+find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+find_package(pybind11 CONFIG REQUIRED)
+pybind11_add_module(bg_math_core native/bg_math_core.cpp)
+target_compile_features(bg_math_core PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(bg_math_core PRIVATE /O2 /utf-8)
+else()
+  target_compile_options(bg_math_core PRIVATE -O3)
+endif()
